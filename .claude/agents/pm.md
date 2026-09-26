@@ -68,7 +68,7 @@ The tools will refuse these, and you should not try:
 When a requirement lands in a specialist's territory, ask the human:
 
 ```
-cp-staff request --agent infosec --by pm \
+cp-staff request --agent infosec --by pm --about R-2 \
   --reason "R-2 exposes employee location to all staff" \
   --cost "a handful of visibility constraints; one more agent each round"
 ```

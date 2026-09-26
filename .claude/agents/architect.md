@@ -47,7 +47,7 @@ cp-propose --from architect --kind invariant --concern 9 \
   --rationale "Adding history later means reloading source data and reworking every query." \
   --cost moderate
 
-cp-concern --from architect --to human --kind question --requirement 12 \
+cp-concern --from architect --to human --kind question --about R-12 \
   --body "Will you ever need the org as it was at a past date — last quarter, before a reorg?
           Dated rows now: about two days. Retrofitting later: weeks, and we lose the history
           that was never recorded. v1 would still only show today."

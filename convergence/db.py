@@ -151,6 +151,69 @@ def concern(conn, concern_id):
     return row
 
 
+def about(conn, text, rule, kind_label):
+    """Resolve --about R-12 / C-3 against a concern kind's `about` rule.
+
+    Returns (requirement_id, concern_id), at most one of them set.
+    """
+    if rule == "none":
+        if text:
+            raise Refused(f"a '{kind_label}' concern starts a trail, so it is not about anything")
+        return None, None
+    if not text:
+        wanted = {"requirement": "R-12", "concern": "C-3"}.get(rule, "R-12 or C-3")
+        raise Refused(f"say what prompted this '{kind_label}': --about {wanted} "
+                      "(the requirement or concern you read)")
+    prefix, _, number = text.strip().upper().partition("-")
+    if not number.isdigit() or prefix not in ("R", "C"):
+        raise Refused(f"--about takes R-<id> or C-<id>, not '{text}'")
+    target = {"R": "requirement", "C": "concern"}[prefix]
+    if rule not in ("any", target):
+        raise Refused(f"a '{kind_label}' concern is about a {rule}, not a {target}")
+    if prefix == "R":
+        return requirement(conn, int(number))["id"], None
+    return None, concern(conn, int(number))["id"]
+
+
+def open_concerns_on(conn, req_id):
+    """Open concerns this requirement came from, or that are about it."""
+    return conn.execute(
+        """SELECT c.id FROM concerns c
+            WHERE c.status = 'open'
+              AND (c.about_requirement_id = ?
+                   OR c.id IN (SELECT concern_id FROM requirement_concerns
+                                WHERE requirement_id = ?))
+            ORDER BY c.id""",
+        (req_id, req_id),
+    ).fetchall()
+
+
+def unseen_by(conn, req_row, decider_id):
+    """Active agents who have not read this requirement in their queue yet."""
+    proposed_at = conn.execute(
+        """SELECT MIN(id) AS id FROM requirement_events
+            WHERE requirement_id = ? AND to_status = 'proposed'""",
+        (req_row["id"],),
+    ).fetchone()["id"] or 0
+    return conn.execute(
+        """SELECT a.* FROM agents a JOIN agent_phases p ON p.agent_id = a.id
+            WHERE a.active = 1 AND p.phase = ? AND a.id NOT IN (?, ?, ?)
+              AND a.last_seen_change < ?
+            ORDER BY a.id""",
+        (state(conn)["phase"], HUMAN_ID, req_row["proposed_by"], decider_id, proposed_at),
+    ).fetchall()
+
+
+def named_by(conn, answer_id):
+    """The requirements an answer names, with their current wording and status."""
+    return conn.execute(
+        """SELECT r.id, r.kind, r.status, r.statement FROM answer_requirements x
+             JOIN requirements r ON r.id = x.requirement_id
+            WHERE x.answer_id = ? ORDER BY r.id""",
+        (answer_id,),
+    ).fetchall()
+
+
 def deliverable(conn, deliverable_id):
     row = conn.execute("SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)).fetchone()
     if row is None:
@@ -214,16 +277,63 @@ def outstanding(conn, agent_row):
     ).fetchall()
 
 
+# An answer whose kind requires a recipient (escalated) hands the concern on;
+# the raiser never judges it. Every other answer waits for the raiser's verdict.
+JUDGED = "(SELECT value FROM answer_kinds WHERE requires IS NOT 'recipient')"
+
+
 def to_review(conn, agent_row):
     """Answers to this agent's own concerns that it has not judged yet."""
     return conn.execute(
-        """SELECT w.*, c.body AS concern_body, c.kind AS concern_kind, g.name AS answerer
-             FROM answers w
-             JOIN concerns c ON c.id = w.concern_id
-             JOIN agents g ON g.id = w.answered_by
-            WHERE c.raised_by = ? AND w.satisfied IS NULL
-            ORDER BY w.id""",
+        f"""SELECT w.*, c.body AS concern_body, c.kind AS concern_kind, g.name AS answerer
+              FROM answers w
+              JOIN concerns c ON c.id = w.concern_id
+              JOIN agents g ON g.id = w.answered_by
+             WHERE c.raised_by = ? AND c.status = 'open' AND w.satisfied IS NULL
+               AND w.kind IN {JUDGED}
+             ORDER BY w.id""",
         (agent_row["id"],),
+    ).fetchall()
+
+
+def awaiting_verdict(conn, concern_id):
+    """The answer on this concern the raiser has yet to judge, if any.
+
+    There is at most one: cp-answer refuses a second while one is waiting.
+    """
+    return conn.execute(
+        f"""SELECT * FROM answers
+             WHERE concern_id = ? AND satisfied IS NULL AND kind IN {JUDGED}
+             ORDER BY id DESC LIMIT 1""",
+        (concern_id,),
+    ).fetchone()
+
+
+def waiting_on(conn, agent_row):
+    """Concerns this agent raised that are still open: it is mid-argument."""
+    return conn.execute(
+        "SELECT id FROM concerns WHERE raised_by = ? AND status = 'open' ORDER BY id",
+        (agent_row["id"],),
+    ).fetchall()
+
+
+def abandoned_drafts(conn):
+    """Proposed requirements whose origin concerns all closed without naming them.
+
+    The answerer drafted it, then settled the concern some other way, so no
+    one is going to ask for a ruling on it.
+    """
+    return conn.execute(
+        """SELECT r.id, r.statement FROM requirements r
+            WHERE r.status = 'proposed'
+              AND EXISTS (SELECT 1 FROM requirement_concerns rc WHERE rc.requirement_id = r.id)
+              AND NOT EXISTS (
+                    SELECT 1 FROM requirement_concerns rc JOIN concerns c ON c.id = rc.concern_id
+                     WHERE rc.requirement_id = r.id AND c.status = 'open')
+              AND NOT EXISTS (
+                    SELECT 1 FROM answer_requirements x JOIN answers w ON w.id = x.answer_id
+                     WHERE x.requirement_id = r.id AND w.satisfied = 1)
+            ORDER BY r.id"""
     ).fetchall()
 
 

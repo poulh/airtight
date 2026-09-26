@@ -45,8 +45,9 @@ CREATE TABLE duty_relations (
 CREATE TABLE concern_kinds (
   value         TEXT PRIMARY KEY,
   description   TEXT NOT NULL,
-  must_address  TEXT,   -- role this kind may only be addressed to
-  via_tool      TEXT,   -- created by this tool, not by cp-concern
+  must_address  TEXT,            -- role this kind may only be addressed to
+  via_tool      TEXT,            -- created by this tool, not by cp-concern
+  about         TEXT NOT NULL,   -- what it must point at: none | requirement | concern | any
   seq           INTEGER NOT NULL
 );
 
@@ -146,10 +147,15 @@ CREATE TABLE concerns (
   raised_by      INTEGER NOT NULL REFERENCES agents(id),
   addressed_to   INTEGER NOT NULL REFERENCES agents(id),
   body           TEXT NOT NULL,
+  -- What the raiser read that prompted this: a requirement or another concern.
+  -- Only a kind whose `about` is 'none' (the brief) may leave both empty.
+  about_requirement_id INTEGER REFERENCES requirements(id),
+  about_concern_id     INTEGER REFERENCES concerns(id),
   raised_group   INTEGER,
   status         TEXT NOT NULL DEFAULT 'open' REFERENCES concern_statuses(value),
   round          INTEGER NOT NULL,
-  resolved_round INTEGER
+  resolved_round INTEGER,
+  CHECK (about_requirement_id IS NULL OR about_concern_id IS NULL)
 );
 
 CREATE INDEX idx_concerns_queue ON concerns(addressed_to, status);
@@ -167,6 +173,14 @@ CREATE TABLE answers (
 );
 
 CREATE INDEX idx_answers_thread ON answers(concern_id, answered_by, id);
+
+-- The requirements an accepted answer names, so the raiser judges the answer
+-- and the exact wording together.
+CREATE TABLE answer_requirements (
+  answer_id      INTEGER NOT NULL REFERENCES answers(id),
+  requirement_id INTEGER NOT NULL REFERENCES requirements(id),
+  PRIMARY KEY (answer_id, requirement_id)
+);
 
 -- -------------------------------------------------------------- the outcome
 
@@ -215,7 +229,7 @@ CREATE TABLE requirements (
 
 CREATE INDEX idx_requirements_status ON requirements(status, kind);
 
--- Why a requirement exists, and what has been argued against it.
+-- Why a requirement exists. What argues against it is concerns.about_requirement_id.
 CREATE TABLE requirement_concerns (
   requirement_id INTEGER NOT NULL REFERENCES requirements(id),
   concern_id     INTEGER NOT NULL REFERENCES concerns(id),

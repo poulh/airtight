@@ -39,7 +39,7 @@ cp-propose --from infosec --kind constraint --concern 21 \
   --statement "An employee's office location is visible to all staff; home address is not stored." \
   --rationale "The directory needs location to be useful; home address adds exposure with no stated use."
 
-cp-concern --from infosec --to architect --kind proposal --requirement 12 \
+cp-concern --from infosec --to architect --kind proposal --about R-12 \
   --body "Authorization for directory and org-tree reads should sit at the query layer, not the
           page. A later API or CSV export otherwise re-implements it, and one of them will get
           it wrong. Worth an invariant?"

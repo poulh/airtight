@@ -38,7 +38,7 @@ For each one that matters, raise it as a concern addressed to the agent who owns
 requirement, and propose the requirement that resolves it:
 
 ```
-cp-concern --from qa --to pm --kind risk --requirement 12 \
+cp-concern --from qa --to pm --kind risk --about R-12 \
   --body "R-12 counts all reports recursively. If the HR feed ever contains a cycle
           (A reports to B reports to A), that count never terminates and the page hangs.
           Bad feeds are not hypothetical."

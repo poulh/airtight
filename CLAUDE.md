@@ -4,13 +4,16 @@ A Claude Code skill (planned, not built yet) that turns a project idea into conv
 requirements, an architecture, deliverables and milestone files before any code gets written.
 It then builds one milestone at a time. `convergence-pipeline.md` holds the full design.
 
-## Where things stand (2026-09-20)
+## Where things stand (2026-09-26)
 
 - Working: `schema.sql`, `pipeline.yaml`, the `convergence` package, `pyproject.toml`,
-  `setup.sh`, and the eleven agent charters in `.claude/agents/` plus `protocol.md`. The
-  twelve `cp-*` tools run and their rules are tested end to end against the employee-hub
-  walkthrough. The orchestrator skill is `.claude/skills/converge/SKILL.md`. No milestone
-  template and no phase-3 tools yet, so phases 3 and 4 are described but not runnable.
+  `setup.sh`, and the eleven agent charters in `.claude/agents/` plus `protocol.md`. All
+  sixteen `cp-*` tools are installed in `.venv`. The phase 1–2 tools are tested end to end
+  against the employee-hub walkthrough; the phase-3 tools (`cp-deliverable`,
+  `cp-milestone`) pass a smoke test (happy path plus wrong-role refusals) but have not been
+  run through the walkthrough. The orchestrator skill is `.claude/skills/converge/SKILL.md`.
+  There is no milestone template and no `cp-render milestone` yet, so phase 3 can fill the
+  tables but cannot produce the `milestone-N.md` files phase 4 builds from.
 - Charter file names match `agents.role` in `pipeline.yaml` and the `name:` in each
   charter's frontmatter; `protocol.md` is the shared turn protocol every charter points to.
 - `./setup.sh` creates `.venv` and installs the package editable; re-running it is safe, and
@@ -19,9 +22,9 @@ It then builds one milestone at a time. `convergence-pipeline.md` holds the full
   requirement kinds, answer kinds, statuses, cost flags, link relations), each value with a
   natural-language description: the tools enforce the values, the descriptions help an agent
   pick the right one.
-- `tools/init.py` validates the config and builds the database deterministically
-  (`--check` validates only, `--force` replaces). It needs PyYAML, which is **not installed**
-  on this machine yet.
+- `cp-init` validates the config and builds the database deterministically
+  (`--check` validates only, `--force` replaces). Its PyYAML dependency is installed in
+  `.venv` by `setup.sh`.
 - The design was substantially revised on 2026-09-19: shared state moved from a Markdown
   concerns log to a SQLite database, the interview merged into the convergence loop, the
   round budget removed, and a deliverables layer added above milestones.
@@ -50,9 +53,16 @@ cross-checks the YAML, the charters, the skill and the database, and reports dri
   requirement links back to the concerns that produced it.
 - **One addressee per concern**, as a foreign key. No bitmask (considered and rejected: the
   database cannot validate a bitmask, and per-recipient state gets awkward).
-- **Answers are typed**: accepted (names requirement ids), rejected (with reason), or
-  escalated. The raiser sets `satisfied` and may `reply`; a follow-up is a new answer row with
-  the same `concern_id`.
+- **Answers are typed**: accepted (names requirement ids, stored in `answer_requirements`),
+  rejected (with reason), or escalated. The raiser sets `satisfied` and may `reply` on the
+  answer row; a follow-up is a new answer row with the same `concern_id`.
+- **Every concern says what prompted it** — `about_requirement_id` or `about_concern_id`,
+  required by `concern_kinds.about`. Only the brief is about nothing; it is the root every
+  trail leads back to. An objection is a concern about a requirement.
+- **Draft, then agree, then accept.** An accepted answer names a *proposed* requirement so
+  the raiser judges exact wording. `cp-decide` will not accept it while a concern from or
+  about it is open, or before every active agent has marked it seen. A rewording leaves the
+  original in force until the rewording is accepted.
 - **Status changes update the requirement row in place**; only a change to the `statement`
   text creates a new row with `supersedes_id`. `requirement_events` keeps the history, so a
   requirement deferred, revived and deferred again still reads back.
@@ -87,11 +97,12 @@ cross-checks the YAML, the charters, the skill and the database, and reports dri
 
 ## Open threads
 
-1. K — rounds of back-and-forth before a thread counts as stalled.
-2. The spend cap, and what the Scribe reports when it trips.
-3. Whether the Scribe checks in on a cadence or only when something needs the human.
-4. Whether dormant agents wake automatically when their area is touched again.
-5. Where the database lives relative to the project repo, and whether it is committed.
+1. The spend cap, and what the Scribe reports when it trips (nothing measures money yet).
+2. Whether dormant agents wake automatically when their area is touched again.
+3. Where the database lives relative to the project repo, and whether it is committed.
+
+Settled and now in `policy` (see `cp-policy`): stall threshold (`stall_replies`,
+`stall_rounds_open`) and the Scribe's check-in cadence (`report_every_rounds`).
 
 ## The tools
 
@@ -101,17 +112,17 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 |---|---|
 | `cp-init` | Validates `pipeline.yaml`, builds the database. `--check`, `--force` |
 | `cp-queue` | An agent's turn: concerns to answer, answers to review, requirement changes since `last_seen_change`. `--json`, `--mark-seen` |
-| `cp-concern` | Raise one. Refuses `staffing` (use `cp-staff`), an appeal aimed anywhere but the human, self-addressing, inactive agents |
-| `cp-answer` | Refuses anything that is not accepted-with-requirement-ids, rejected-with-a-reason, or escalated-to-someone. Escalation reassigns the concern |
-| `cp-review` | The raiser judges an answer. A "no" needs a reply; a "yes" resolves the concern |
-| `cp-propose` | New requirement. Cost flags are the architect's only. `--supersedes` rewords |
-| `cp-decide` | Refuses: a goal/non_goal/success_criterion/invariant decided by anyone but the human; Peter cutting something the human asked for (including via their answers); a defer/reject with no reason |
+| `cp-concern` | Raise one. `--about R-n\|C-n` is required except for the brief. Refuses `staffing` (use `cp-staff`), an appeal aimed anywhere but the human, self-addressing, inactive agents |
+| `cp-answer` | Refuses anything that is not accepted-with-requirement-ids, rejected-with-a-reason, or escalated-to-someone, and refuses a second answer while the first awaits the raiser's verdict. Escalation reassigns the concern and is never judged |
+| `cp-review` | The raiser judges the latest answer (not an escalation). A "no" needs a reply; a "yes" resolves the concern |
+| `cp-propose` | New requirement. Cost flags are the architect's only. `--supersedes` rewords; the original stays in force until the rewording is accepted |
+| `cp-decide` | Refuses: a goal/non_goal/success_criterion/invariant decided by anyone but the human; Peter cutting something the human asked for (including via their answers); a defer/reject with no reason; accepting while a concern from or about it is open, or before every active agent has seen it |
 | `cp-staff` | `request` (states trigger and cost, goes to the human), `approve`, `decline` — human only |
-| `cp-signoff` | Refuses while the agent still has mail |
-| `cp-state` | Round, phase, what it is paused on, who has not signed off, whether it has converged |
+| `cp-signoff` | Refuses while the agent still has mail, or has a concern of its own still open |
+| `cp-state` | Round, phase, what it is paused on, who has not signed off, abandoned drafts, whether it has converged |
 | `cp-round` | `--advance` refuses while a concern sits with the human; `--phase N` moves phase |
 | `cp-deliverable` | `propose` (owns deliverables), `decide` (rules_on) |
-| `cp-milestone` | `propose`, `decide`, `review --ok` (reviews slicing), `check --ok` (checks buildability), `assign` |
+| `cp-milestone` | `propose`, `decide`, `review --ok yes/no` (reviews slicing), `check --ok yes/no` (checks buildability), `assign`. Deliverable statuses: proposed, planned, building, delivered |
 | `cp-render` | Generates `requirements.md`; sections come from the vocabularies |
 | `cp-policy` | The rules in force: thresholds, who decides what, duties. `--agent <role>` for one agent |
 | `cp-doctor` | Cross-checks config, charters, skill and database for drift |
@@ -120,5 +131,6 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 
 1. Write `cp-render milestone` and the `milestone-N.md` template (only `cp-render
    requirements` exists).
-2. Add the phase-3 tools for deliverables and milestones — nothing writes to those tables yet.
+2. Extend the employee-hub walkthrough through phase 3 so `cp-deliverable` and
+   `cp-milestone` are tested the way the phase 1–2 tools are.
 3. Dry-run phase 1 on one real, low-stakes project.

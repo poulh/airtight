@@ -176,7 +176,8 @@ def queue_main():
                           "phases": db.phases_of(conn, me["id"]),
                           "duties": [{"duty": d["duty"], "relation": d["relation"]} for d in duties]},
                 "concerns_to_answer": [dict(r) for r in mail],
-                "answers_to_review": [dict(r) for r in reviews],
+                "answers_to_review": [dict(r, names=[dict(n) for n in db.named_by(conn, r["id"])])
+                                      for r in reviews],
                 "requirement_changes": [dict(r) for r in changes],
                 "concern_kinds": {r["value"]: r["description"] for r in db.vocab(conn, "concern_kinds")},
                 "answer_kinds": {r["value"]: r["description"] for r in db.vocab(conn, "answer_kinds")},
@@ -190,12 +191,19 @@ def queue_main():
                 print("  your duties:   " + ", ".join(f"{d['relation']} {d['duty']}" for d in duties))
             print(f"\nCONCERNS ADDRESSED TO YOU ({len(mail)})")
             for row in mail:
-                print(f"  C-{row['id']} [{row['kind']}] from {row['raiser_name']} (round {row['round']})")
+                about = (f", about R-{row['about_requirement_id']}" if row["about_requirement_id"]
+                         else f", about C-{row['about_concern_id']}" if row["about_concern_id"]
+                         else "")
+                print(f"  C-{row['id']} [{row['kind']}] from {row['raiser_name']} "
+                      f"(round {row['round']}{about})")
                 print(f"       {row['body'].strip()}")
             print(f"\nANSWERS AWAITING YOUR REVIEW ({len(reviews)})")
             for row in reviews:
                 print(f"  A-{row['id']} on C-{row['concern_id']} from {row['answerer']} [{row['kind']}]")
                 print(f"       {row['body'].strip()}")
+                for named in db.named_by(conn, row["id"]):
+                    print(f"       names R-{named['id']} [{named['kind']}, {named['status']}]: "
+                          f"{named['statement'].strip()}")
             print(f"\nREQUIREMENT CHANGES SINCE YOU LAST LOOKED ({len(changes)})")
             for row in changes:
                 arrow = f"{row['from_status'] or 'new'} -> {row['to_status']}"
@@ -220,7 +228,7 @@ def concern_main():
     parser.add_argument("--kind", required=True)
     parser.add_argument("--body", required=True)
     parser.add_argument("--group", type=int, help="same concern sent to several agents")
-    parser.add_argument("--requirement", type=int, help="the requirement this argues against")
+    parser.add_argument("--about", help="what prompted this: R-12 (a requirement) or C-3 (a concern)")
     args = parser.parse_args()
 
     def go():
@@ -237,21 +245,21 @@ def concern_main():
                           f"{kind['must_address']}, not to {them['name']}")
         if me["id"] == them["id"]:
             raise Refused("an agent cannot address a concern to itself")
+        about_req, about_concern = db.about(conn, args.about, kind["about"], kind["value"])
 
         round_no = db.state(conn)["round"]
         cur = conn.execute(
-            """INSERT INTO concerns (kind, raised_by, addressed_to, body, raised_group, round)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (kind["value"], me["id"], them["id"], args.body, args.group, round_no),
+            """INSERT INTO concerns (kind, raised_by, addressed_to, body, about_requirement_id,
+                                     about_concern_id, raised_group, round)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (kind["value"], me["id"], them["id"], args.body, about_req, about_concern,
+             args.group, round_no),
         )
-        if args.requirement:
-            db.requirement(conn, args.requirement)
-            conn.execute(
-                "INSERT INTO requirement_concerns (requirement_id, concern_id, relation) VALUES (?,?,?)",
-                (args.requirement, cur.lastrowid, "objection"),
-            )
         conn.commit()
-        print(f"C-{cur.lastrowid} raised by {me['name']} to {them['name']} [{kind['value']}]")
+        about_text = (f" about R-{about_req}" if about_req
+                      else f" about C-{about_concern}" if about_concern else "")
+        print(f"C-{cur.lastrowid} raised by {me['name']} to {them['name']} "
+              f"[{kind['value']}]{about_text}")
         if them["id"] == HUMAN_ID:
             print("the loop now pauses: this is addressed to the human")
         return 0
@@ -283,6 +291,11 @@ def answer_main():
             raise Refused(f"C-{row['id']} is addressed to {owner['name']}, not you")
         if row["status"] not in ("open", "escalated"):
             raise Refused(f"C-{row['id']} is {row['status']}")
+        waiting = db.awaiting_verdict(conn, row["id"])
+        if waiting:
+            raiser = conn.execute("SELECT name FROM agents WHERE id=?", (row["raised_by"],)).fetchone()
+            raise Refused(f"A-{waiting['id']} is still with {raiser['name']} for a verdict — "
+                          "one answer at a time; wait for their yes or their reply")
 
         req_ids = ids(args.requirements)
         needs = kind["requires"]
@@ -305,6 +318,8 @@ def answer_main():
             (row["id"], me["id"], kind["value"], body, round_no),
         )
         for req_id in req_ids:
+            conn.execute("INSERT INTO answer_requirements (answer_id, requirement_id) VALUES (?,?)",
+                         (cur.lastrowid, req_id))
             conn.execute(
                 "INSERT OR IGNORE INTO requirement_concerns (requirement_id, concern_id, relation) "
                 "VALUES (?,?,?)", (req_id, row["id"], "origin"),
@@ -348,6 +363,12 @@ def review_main():
             raise Refused(f"C-{parent['id']} is not yours to judge")
         if row["satisfied"] is not None:
             raise Refused(f"A-{row['id']} has already been judged")
+        waiting = db.awaiting_verdict(conn, parent["id"])
+        if waiting is None or waiting["id"] != row["id"]:
+            raise Refused(f"A-{row['id']} is a hand-off, not an answer to judge — "
+                          f"C-{parent['id']} is waiting on its new addressee"
+                          if waiting is None else
+                          f"judge the latest answer, A-{waiting['id']}")
 
         satisfied = args.satisfied == "yes"
         if not satisfied and not args.reply:
@@ -395,6 +416,9 @@ def propose_main():
 
         round_no = db.state(conn)["round"]
         old = db.requirement(conn, args.supersedes) if args.supersedes else None
+        if old is not None and old["status"] == "superseded":
+            raise Refused(f"R-{old['id']} is already superseded; reword the requirement that "
+                          "replaced it")
         cur = conn.execute(
             """INSERT INTO requirements (kind, statement, rationale, proposed_by, status,
                                          cost_flag, created_round, supersedes_id)
@@ -409,15 +433,12 @@ def propose_main():
                 "VALUES (?,?,?)", (new_id, args.concern, "origin"),
             )
         db.record_event(conn, new_id, me["id"], None, "proposed", args.rationale, args.concern)
-        if old is not None:
-            conn.execute("UPDATE requirements SET status='superseded', updated_round=? WHERE id=?",
-                         (round_no, old["id"]))
-            db.record_event(conn, old["id"], me["id"], old["status"], "superseded",
-                            f"reworded as R-{new_id}")
         conn.commit()
 
         print(f"R-{new_id} [{kind['value']}] proposed by {me['name']}")
         print(f"the {kind['decided_by']} rules on a {kind['value']} requirement")
+        if old is not None:
+            print(f"R-{old['id']} stays {old['status']} until R-{new_id} is accepted")
         return 0
 
     return run(go)
@@ -470,6 +491,22 @@ def decide_main():
                     raise Refused("cutting something the human asked for is the human's call — "
                                   "raise it with them instead (cp-concern --to human)")
 
+        if status["value"] == "accepted":
+            if db.policy(conn, "accept_needs_concerns_closed", 1):
+                still_open = db.open_concerns_on(conn, row["id"])
+                if still_open:
+                    raise Refused(
+                        f"R-{row['id']} still has open concern(s): "
+                        + ", ".join(f"C-{c['id']}" for c in still_open)
+                        + " — the raiser has to be satisfied first")
+            if db.policy(conn, "accept_needs_all_seen", 1):
+                unseen = db.unseen_by(conn, row, me["id"])
+                if unseen:
+                    raise Refused(
+                        f"R-{row['id']} has not been read yet by: "
+                        + ", ".join(a["role"] for a in unseen)
+                        + " — each gets a turn to raise a concern first")
+
         round_no = db.state(conn)["round"]
         conn.execute(
             """UPDATE requirements SET status=?, decided_by=?, decided_round=?, updated_round=?,
@@ -478,8 +515,17 @@ def decide_main():
         )
         db.record_event(conn, row["id"], me["id"], row["status"], status["value"],
                         args.reason, args.concern)
+        # A rewording replaces the original only once it is itself accepted.
+        old = db.requirement(conn, row["supersedes_id"]) if row["supersedes_id"] else None
+        if status["value"] == "accepted" and old is not None and old["status"] != "superseded":
+            conn.execute("UPDATE requirements SET status='superseded', updated_round=? WHERE id=?",
+                         (round_no, old["id"]))
+            db.record_event(conn, old["id"], me["id"], old["status"], "superseded",
+                            f"replaced by R-{row['id']}", args.concern)
         conn.commit()
         print(f"R-{row['id']} {row['status']} -> {status['value']} by {me['name']}")
+        if status["value"] == "accepted" and old is not None and old["status"] != "superseded":
+            print(f"R-{old['id']} {old['status']} -> superseded (replaced by R-{row['id']})")
         return 0
 
     return run(go)
@@ -496,6 +542,7 @@ def staff_main():
     request.add_argument("--by", required=True)
     request.add_argument("--reason", required=True, help="what triggered it")
     request.add_argument("--cost", help="what it will cost in constraints, rounds, money")
+    request.add_argument("--about", help="the requirement or concern that triggered it: R-12 or C-3")
 
     approve = sub.add_parser("approve", help="bring them in")
     approve.add_argument("--agent", required=True)
@@ -524,6 +571,7 @@ def staff_main():
                 raise Refused(f"{target['name']} joins at phase {target['joins_at_phase']}; "
                               f"this project is in phase {st['phase']}")
             kind = db.term(conn, "concern_kinds", "staffing", "concern kind")
+            about_req, about_concern = db.about(conn, args.about, kind["about"], kind["value"])
             decider = db.who(conn, "staffing", "rules_on")
             if not decider:
                 raise Refused("nobody in this roster rules on staffing")
@@ -544,8 +592,10 @@ def staff_main():
                 print(f"{target['name']} joined in round {round_no} (auto_staff)")
                 return 0
             cur = conn.execute(
-                "INSERT INTO concerns (kind, raised_by, addressed_to, body, round) VALUES (?,?,?,?,?)",
-                (kind["value"], me["id"], decider[0]["id"], body, round_no),
+                """INSERT INTO concerns (kind, raised_by, addressed_to, body, about_requirement_id,
+                                         about_concern_id, round) VALUES (?,?,?,?,?,?,?)""",
+                (kind["value"], me["id"], decider[0]["id"], body, about_req, about_concern,
+                 round_no),
             )
             conn.commit()
             print(f"C-{cur.lastrowid} staffing request for {target['name']} -> {decider[0]['name']}")
@@ -796,6 +846,11 @@ def signoff_main():
         if mail or reviews:
             raise Refused(f"{len(mail)} concern(s) to answer and {len(reviews)} answer(s) to "
                           "review first — run cp-queue")
+        waiting = db.waiting_on(conn, me)
+        if waiting:
+            raise Refused("your own concern(s) are still open: "
+                          + ", ".join(f"C-{c['id']}" for c in waiting)
+                          + " — sign off once they are settled")
         st = db.state(conn)
         conn.execute(
             "INSERT OR REPLACE INTO signoffs (agent_id, round, change_mark, note) VALUES (?,?,?,?)",
@@ -831,6 +886,7 @@ def state_main():
         by_status = conn.execute(
             "SELECT status, COUNT(*) c FROM requirements GROUP BY status ORDER BY status").fetchall()
         pending = [a for a in active if a["id"] not in signed and a["id"] != HUMAN_ID]
+        abandoned = db.abandoned_drafts(conn)
 
         if args.json:
             print(json.dumps({
@@ -839,6 +895,7 @@ def state_main():
                 "paused": bool(waiting),
                 "waiting_on_human": [dict(r) for r in waiting],
                 "stalled": [dict(r) for r in stalls],
+                "abandoned_drafts": [dict(r) for r in abandoned],
                 "open_concerns": open_count,
                 "requirements": {r["status"]: r["c"] for r in by_status},
                 "active": [a["role"] for a in active],
@@ -855,6 +912,11 @@ def state_main():
         print("  requirements: " + (", ".join(f"{r['c']} {r['status']}" for r in by_status) or "none"))
         if stalls:
             print(f"\nSTALLED ({len(stalls)}): " + ", ".join(f"C-{r['id']}" for r in stalls))
+        if abandoned:
+            print(f"\nABANDONED DRAFTS ({len(abandoned)}) — their concerns closed without them; "
+                  "reject or revive:")
+            for row in abandoned:
+                print(f"  R-{row['id']} {row['statement'].strip()}")
         if waiting:
             print(f"\nPAUSED — waiting on the human ({len(waiting)}):")
             for row in waiting:
@@ -1100,7 +1162,8 @@ def render_main():
                  JOIN concerns c ON c.id = w.concern_id
                  JOIN agents g ON g.id = w.answered_by
                  JOIN answer_kinds k ON k.value = w.kind
-                WHERE k.document_section IS NOT NULL ORDER BY c.id""").fetchall()
+                WHERE k.document_section IS NOT NULL AND w.satisfied = 1
+                ORDER BY c.id""").fetchall()
 
         for section in sections:
             lines += [f"## {section}", ""]

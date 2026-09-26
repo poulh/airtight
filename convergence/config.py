@@ -18,7 +18,7 @@ HUMAN_ID = 1
 # vocabulary name -> the attribute columns its values carry, beyond
 # value/description/seq. These are the rules that belong to each value.
 VOCABULARIES = {
-    "concern_kinds": ["must_address", "via_tool"],
+    "concern_kinds": ["must_address", "via_tool", "about"],
     "concern_statuses": [],
     "answer_kinds": ["requires", "document_section"],
     "requirement_kinds": ["decided_by", "document_section"],
@@ -35,7 +35,10 @@ BOOL_ATTRS = {"in_document"}
 ROLE_ATTRS = {"must_address", "decided_by", "set_by"}
 
 # attributes that may not be left out
-REQUIRED_ATTRS = {"requirement_kinds": ["decided_by"]}
+REQUIRED_ATTRS = {"requirement_kinds": ["decided_by"], "concern_kinds": ["about"]}
+
+# attributes whose values the tools interpret, and the values they understand
+ENUM_ATTRS = {"about": ("none", "requirement", "concern", "any")}
 
 # top-level vocabularies that are plain value/description lists
 SIMPLE_LISTS = {"duties": "duties", "duty_relations": "duty_relations"}
@@ -150,6 +153,9 @@ def validate(config):
             if not isinstance(entry, dict):
                 continue
             for attr in attrs:
+                if attr in ENUM_ATTRS and entry.get(attr) not in (None, *ENUM_ATTRS[attr]):
+                    problems.append(f"vocabularies.{name}.{entry.get('value')}.{attr}: "
+                                    f"'{entry[attr]}' is not one of {', '.join(ENUM_ATTRS[attr])}")
                 if attr in ROLE_ATTRS and entry.get(attr):
                     role_refs.append((f"vocabularies.{name}.{entry.get('value')}.{attr}",
                                       entry[attr]))

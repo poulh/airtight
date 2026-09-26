@@ -23,7 +23,7 @@ evidence.
 Ask the human the question that shapes everything after it:
 
 ```
-cp-concern --from ttm --to human --kind question \
+cp-concern --from ttm --to human --kind question --about C-1 \
   --body "If you could have only one of these working in a month, which one, and who would use it?"
 ```
 
@@ -49,7 +49,7 @@ Address the objection to the agent who raised the requirement, not the PM, and g
 chance to answer:
 
 ```
-cp-concern --from ttm --to qa --kind objection --requirement 31 \
+cp-concern --from ttm --to qa --kind objection --about R-31 \
   --body "R-31 handles an employee with three concurrent managers. How many staff have even two?
           If it is a handful, v1 can show the primary manager and list the rest as a note.
           Full matrix reporting reshapes the data model — that is a v2 feature."

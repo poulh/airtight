@@ -110,12 +110,19 @@ CREATE TABLE concerns (
   raised_by     INTEGER NOT NULL REFERENCES agents(id),
   addressed_to  INTEGER NOT NULL REFERENCES agents(id),
   body          TEXT NOT NULL,
+  about_requirement_id INTEGER REFERENCES requirements(id),  -- what the raiser read
+  about_concern_id     INTEGER REFERENCES concerns(id),      --   that prompted this
   raised_group  INTEGER,         -- same question sent to several agents
   status        TEXT NOT NULL DEFAULT 'open',  -- open | resolved | withdrawn | escalated
   round         INTEGER NOT NULL,
   resolved_round INTEGER
 );
 ```
+
+Every concern points at what prompted it: a requirement (`--about R-12`) or another concern
+(`--about C-3`). Only the brief points at nothing, which makes it the root: any concern can be
+followed back through the chain to what the human originally said. The rule lives on
+`concern_kinds.about`. An objection is simply a concern about a requirement.
 
 ### `answers` — the replies, and the argument
 
@@ -130,11 +137,18 @@ CREATE TABLE answers (
   reply       TEXT,                  -- the raiser's follow-up when satisfied = 0
   round       INTEGER NOT NULL
 );
+
+CREATE TABLE answer_requirements (    -- which requirements an accepted answer names
+  answer_id      INTEGER NOT NULL REFERENCES answers(id),
+  requirement_id INTEGER NOT NULL REFERENCES requirements(id)
+);
 ```
 
 An answer is never just prose. It is one of three shapes:
 
-- **accepted** — names the requirement ids it created or changed
+- **accepted** — names the requirement ids it created or changed. The requirement is drafted
+  first (status `proposed`) so the raiser judges the exact wording, and their queue shows it
+  under the answer
 - **rejected** — states why; that reason becomes an accepted risk in the final document
 - **escalated** — hands it to Peter, or to the human
 
@@ -165,10 +179,16 @@ CREATE TABLE requirements (
 CREATE TABLE requirement_concerns (
   requirement_id INTEGER NOT NULL REFERENCES requirements(id),
   concern_id     INTEGER NOT NULL REFERENCES concerns(id),
-  relation       TEXT NOT NULL,   -- origin | objection
+  relation       TEXT NOT NULL,   -- origin
   PRIMARY KEY (requirement_id, concern_id, relation)
 );
 ```
+
+A requirement becomes real in this order: drafted (`proposed`), the raiser is satisfied with
+the answer that names it, every active agent has read it in their queue, and only then can it
+be accepted. `cp-decide` enforces the last two through `policy.accept_needs_concerns_closed`
+and `policy.accept_needs_all_seen`. A rewording (`supersedes_id`) leaves the original in force
+until the rewording is itself accepted.
 
 The goal lives here too, as rows of kind `goal`, `non_goal` and `success_criterion`. Revising
 the goal in round 12 works like any other requirement change, through `supersedes_id`.
@@ -420,10 +440,8 @@ Settled since the first draft, and now in `policy` rather than in prose: `stall_
 
 ## Next steps
 
-1. Write the schema as `schema.sql`, with the roster seeded into `agents`.
-2. Write the agent definitions in `.claude/agents/` — Peter, the Scribe, Tina, Arty, Quinn,
-   Ian, Carla, Otto, Uma, Dana, Rita.
-3. Write the orchestrator skill in `.claude/skills/`: turn scheduling, the pause and finish
-   checks, staffing approval, phase transitions, and document generation.
-4. Write the generators for `requirements.md` and `milestone-N.md`.
-5. Dry-run on one real, low-stakes project.
+Done: `schema.sql`, the agent definitions, the orchestrator skill, the `requirements.md`
+generator, and the phase-3 tools (`cp-deliverable`, `cp-milestone`).
+
+1. Write the `milestone-N.md` generator (`cp-render milestone`) and its template.
+2. Dry-run on one real, low-stakes project.

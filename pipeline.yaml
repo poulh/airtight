@@ -67,6 +67,18 @@ policy:
     description: >
       1 means only the human may defer or reject a requirement they asked for,
       including one derived from their own answers. 0 lets the PM cut it.
+  - key: accept_needs_concerns_closed
+    value: 1
+    description: >
+      1 means a requirement cannot be accepted while any concern it came from,
+      or any concern about it, is still open. The raiser has to be satisfied
+      before the wording becomes real. Deferring or rejecting is not blocked.
+  - key: accept_needs_all_seen
+    value: 1
+    description: >
+      1 means a requirement cannot be accepted until every active agent has
+      read it in their queue (cp-queue --mark-seen), so each gets one chance
+      to raise a concern first. The proposer and the decider are exempt.
 
 # ------------------------------------------------------------ what agents do
 
@@ -115,6 +127,10 @@ vocabularies:
   # What an agent is doing when it raises something.
   #   must_address — the only role this kind may be addressed to
   #   via_tool     — this kind is created by that tool, not by cp-concern
+  #   about        — what the raiser must point at (--about R-12 or C-3): the
+  #                  requirement or concern they read that prompted this.
+  #                  none | requirement | concern | any. Only the brief, which
+  #                  starts every trail, points at nothing.
   concern_kinds:
     - value: brief
       description: >
@@ -122,35 +138,42 @@ vocabularies:
         addressed to the PM. Usually concern #1; may be raised again when the
         human changes direction.
       must_address: pm
+      about: none
     - value: question
       description: >
         Something the raiser does not know and cannot decide alone. Expects an
         answer from the addressee.
+      about: any
     - value: risk
       description: >
         Something that could go wrong and is not yet addressed by any
         requirement. Expects either a new requirement or an explicit decision
         to accept the risk.
+      about: any
     - value: objection
       description: >
         Disagreement with an existing requirement, decision or answer. Expects
         the requirement to change, or the objection to be overruled with a
         reason.
+      about: any
     - value: proposal
       description: >
         A concrete suggestion for a requirement or an approach, put to another
         agent for agreement before it is proposed as a requirement.
+      about: any
     - value: staffing
       description: >
         A request to bring another agent into the project. Goes to the human
         with what triggered it and what it will cost.
       must_address: human
       via_tool: cp-staff
+      about: any
     - value: appeal
       description: >
         A formal challenge to a decision the PM made. Goes to the human, never
         back to the PM.
       must_address: human
+      about: any
 
   concern_statuses:
     - value: open
@@ -242,7 +265,10 @@ vocabularies:
       in_document: true
       document_section: Deferred and cut
     - value: superseded
-      description: Replaced by a reworded requirement, which points back via supersedes_id.
+      description: >
+        Replaced by a reworded requirement, which points back via supersedes_id.
+        Happens when the rewording is accepted; until then the original stays
+        in force.
       in_document: false
 
   # set_by — the only role that may apply a cost flag
@@ -263,8 +289,6 @@ vocabularies:
   link_relations:
     - value: origin
       description: This concern is why the requirement exists.
-    - value: objection
-      description: This concern argues against the requirement, or changed it.
 
   deliverable_statuses:
     - value: proposed
