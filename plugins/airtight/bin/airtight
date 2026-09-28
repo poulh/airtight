@@ -1,0 +1,21 @@
+#!/bin/sh
+# Runs the at-* tools. Every at-* file in this directory is a two-line stub
+# that calls this script with the tool's name. The plugin puts bin/ on PATH.
+#
+# Python: the first of these that can import PyYAML —
+#   $AIRTIGHT_PYTHON, the environment /airtight:setup builds in the plugin's
+#   data directory, a development .venv next to the plugin, or python3.
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(dirname "$here")
+for py in "$AIRTIGHT_PYTHON" \
+          "$HOME"/.claude/plugins/data/*/airtight-venv/bin/python \
+          "$root/../../.venv/bin/python" \
+          python3; do
+  [ -n "$py" ] || continue
+  command -v "$py" >/dev/null 2>&1 || [ -x "$py" ] || continue
+  if "$py" -c "import yaml" 2>/dev/null; then
+    PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m airtight "${AIRTIGHT_TOOL:-$(basename "$0")}" "$@"
+  fi
+done
+echo "airtight: no Python with PyYAML found — run /airtight:setup" >&2
+exit 3

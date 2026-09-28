@@ -1,0 +1,14 @@
+{
+  "name": "airtight",
+  "description": "You can't code autonomously if you don't have airtight requirements.",
+  "owner": {
+    "name": "Poul Hornsleth"
+  },
+  "plugins": [
+    {
+      "name": "airtight",
+      "source": "./plugins/airtight",
+      "description": "You can't code autonomously if you don't have airtight requirements. Specialist agents argue your idea into unanimously agreed requirements before any code is written."
+    }
+  ]
+}

@@ -1,43 +1,17 @@
+# Development only. The plugin runs its tools through plugins/airtight/bin, which
+# puts plugins/airtight on PYTHONPATH; this file just declares the dependency so
+# ./setup.sh can build a .venv for working on the plugin in this repo.
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "convergence-pipeline"
+name = "airtight"
 version = "0.1.0"
-description = "Convergence pipeline: statements, approvals, concerns and answers in SQLite, driven by specialist agents"
+description = "You can't code autonomously if you don't have airtight requirements."
 requires-python = ">=3.11"
-dependencies = [
-  "pyyaml>=6.0",
-]
-
-[project.scripts]
-# Setup
-cp-init        = "convergence.cli:init_main"
-# Turns
-cp-turn        = "convergence.cli:turn_main"
-cp-queue       = "convergence.cli:queue_main"
-# Every agent
-cp-approve     = "convergence.cli:approve_main"
-cp-concern     = "convergence.cli:concern_main"
-cp-answer      = "convergence.cli:answer_main"
-cp-review      = "convergence.cli:review_main"
-cp-staff       = "convergence.cli:staff_main"
-# Peter
-cp-statement   = "convergence.cli:statement_main"
-cp-deliverable = "convergence.cli:deliverable_main"
-cp-milestone   = "convergence.cli:milestone_main"
-cp-escalate    = "convergence.cli:escalate_main"
-cp-report      = "convergence.cli:report_main"
-# Orchestration
-cp-state       = "convergence.cli:state_main"
-cp-round       = "convergence.cli:round_main"
-cp-render      = "convergence.cli:render_main"
-cp-policy      = "convergence.cli:policy_main"
-cp-doctor      = "convergence.cli:doctor_main"
+dependencies = ["pyyaml>=6.0"]
 
 [tool.setuptools]
-packages = ["convergence"]
-
-[tool.setuptools.package-data]
-convergence = ["../schema.sql"]
+package-dir = { "" = "plugins/airtight" }
+packages = ["airtight"]

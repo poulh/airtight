@@ -1,0 +1,2 @@
+#!/bin/sh
+AIRTIGHT_TOOL=at-escalate exec "$(dirname "$0")/airtight" "$@"

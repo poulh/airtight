@@ -1,0 +1,2 @@
+#!/bin/sh
+AIRTIGHT_TOOL=at-render exec "$(dirname "$0")/airtight" "$@"

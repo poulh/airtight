@@ -1,0 +1,483 @@
+# airtight — project configuration
+#
+# THE SINGLE SOURCE OF TRUTH. at-init reads this file and builds the project
+# database from it; the tools then read their rules back out of the database.
+# No rule about this pipeline is written in Python, and none is written only in
+# prose. If a fact describes a thing, it is stored on that thing:
+#
+#   "only the human can change a goal"   -> statement_kinds.goal.guarded_by
+#   "a criterion must measure a goal"    -> statement_kinds.success_criterion.requires_link
+#   "Peter writes statements"            -> agents.pm.owns
+#   "a thread goes to the human after 4" -> policy.stall_replies
+#
+# Descriptions are shown to agents when they choose a value, so write them for
+# a reader. Run at-doctor after editing: it cross-checks this file against the
+# charters, the skill and the database, and reports anything that has drifted.
+
+# ---------------------------------------------------------------- the phases
+
+phases:
+  - number: 1
+    key: converge
+    name: Converge
+    ends_when: >
+      Every live statement is agreed, no concern is open, and Peter has acted on
+      every closed concern.
+  - number: 2
+    key: architect
+    name: Architect
+    ends_when: >
+      architecture.md is written against the whole agreed statement set, and
+      every statement it led to is agreed.
+  - number: 3
+    key: slice
+    name: Slice
+    ends_when: >
+      Every agreed requirement of the first deliverable is in a milestone, the
+      architect has passed the slicing, and the developer has checked every
+      milestone.
+  - number: 4
+    key: build
+    name: Build
+    ends_when: >
+      The human stops asking for the next milestone.
+
+# --------------------------------------------------------------- the numbers
+
+policy:
+  - key: stall_replies
+    value: 4
+    description: >
+      Replies on one concern since it was last reassigned before it goes to the
+      human automatically, with both positions. Reassignment resets the count.
+  - key: bounce_total_replies
+    value: 8
+    description: >
+      Replies on one concern over its whole life before the report flags it as
+      bouncing. This count never resets.
+  - key: report_every_rounds
+    value: 10
+    description: >
+      How often Peter runs the report to the human. The loop pauses at each
+      report until the human says continue; this is the spend brake.
+
+# ------------------------------------------------------------ what agents do
+
+# Valid duties. An agent's owns / rules_on / reviews / checks lists are
+# validated against these, and the tools enforce them.
+duties:
+  - value: interview
+    description: Asking the human what they want, by raising concerns addressed to them.
+  - value: statements
+    description: Writing, superseding, moving and cancelling statements, citing closed concerns.
+  - value: deliverables
+    description: Adding, splitting and cancelling deliverables, citing closed concerns.
+  - value: milestones
+    description: Writing milestones and assigning requirements to them, citing closed concerns.
+  - value: milestone_proposals
+    description: >
+      Proposing, as concerns to the writer of milestones, how a deliverable's
+      agreed requirements split into milestones.
+  - value: escalation
+    description: Sending a stuck concern to the human early, with both positions.
+  - value: reporting
+    description: Running the periodic report to the human, which pauses the loop.
+  - value: staffing
+    description: Approving or declining a new agent joining the project.
+  - value: slicing
+    description: Judging whether a milestone is self-contained and honours the invariants.
+  - value: architecture
+    description: Designing against the whole agreed statement set.
+  - value: buildability
+    description: Confirming a milestone can be built from its file as written.
+  - value: code
+    description: Implementing a milestone on its branch, and merging it.
+  - value: testing
+    description: Writing automated acceptance tests for a milestone from its statements.
+  - value: code_review
+    description: Critiquing an implementation itself.
+  - value: acceptance
+    description: Starting a milestone, and accepting it once tried.
+
+duty_relations:
+  - value: owns
+    description: Does it and is answerable for it.
+  - value: rules_on
+    description: Makes the final call.
+  - value: reviews
+    description: Must pass it before it proceeds.
+  - value: checks
+    description: Confirms it is usable before work starts.
+
+vocabularies:
+
+  # Everything everyone must agree to.
+  #   level          — project (no deliverable) or deliverable (exactly one live deliverable)
+  #   guarded_by     — creating, superseding or cancelling one must cite a concern
+  #                    this role answered or raised
+  #   requires_link  — the link relation a statement of this kind must have when written
+  #   writable       — false: only at-init writes it
+  #   document_section — where it appears in requirements.md
+  statement_kinds:
+    - value: brief
+      description: >
+        The human's own words, verbatim, recorded by at-init as S-1. Peter
+        supersedes it into goals and requirements, citing the human's answers.
+      level: project
+      guarded_by: human
+      writable: false
+      document_section: Brief
+    - value: goal
+      description: >
+        Why the project exists. A direction, not a test. Every statement is
+        judged against the live goals.
+      level: project
+      guarded_by: human
+      writable: true
+      document_section: Goals
+    - value: non_goal
+      description: >
+        Deliberately out of scope, recorded so it stops being re-proposed.
+      level: project
+      guarded_by: human
+      writable: true
+      document_section: Goals
+    - value: success_criterion
+      description: >
+        How we will know a goal is met. Measurable. Must name the goal it
+        measures.
+      level: project
+      guarded_by: human
+      requires_link: measures
+      writable: true
+      document_section: Goals
+    - value: invariant
+      description: >
+        A rule the code must keep true everywhere, cheap to decide now and a
+        rewrite later (times are stored in UTC; employee rows are dated, never
+        overwritten).
+      level: project
+      guarded_by: human
+      writable: true
+      document_section: Invariants
+    - value: scope
+      description: >
+        What one deliverable covers and leaves out. Every deliverable needs
+        one.
+      level: deliverable
+      writable: true
+      document_section: Scope
+    - value: functional
+      description: >
+        Something the system does, stated so it can be tested. One behaviour
+        per statement.
+      level: deliverable
+      writable: true
+      document_section: Requirements
+    - value: constraint
+      description: >
+        A rule on how the system does something — security, compliance,
+        performance, operations — within one deliverable.
+      level: deliverable
+      writable: true
+      document_section: Requirements
+
+  # live — a live statement is still in play; the others are history
+  statement_statuses:
+    - value: pending
+      description: Written, not yet approved by every approver, or a concern on it is unsettled.
+      live: true
+    - value: agreed
+      description: Every approver approved it, no concern is open, nothing awaits Peter.
+      live: true
+    - value: superseded
+      description: Replaced by the statements that link to it with 'supersedes'.
+      live: false
+    - value: cancelled
+      description: Dropped, with nothing replacing it.
+      live: false
+
+  # Read as a sentence: <from> <relation> <to>.
+  #   from_kinds / to_kinds — comma-separated kinds allowed at each end; empty means any
+  link_relations:
+    - value: supersedes
+      description: The from statement replaces the to statement (split, merge, rewording, move).
+    - value: measures
+      description: The from success criterion measures the to goal.
+      from_kinds: success_criterion
+      to_kinds: goal
+
+  # What an agent is doing when it raises something.
+  #   must_address — the only role this kind may be addressed to
+  #   via_tool     — this kind is created by that tool, not by at-concern
+  concern_kinds:
+    - value: question
+      description: >
+        Something the raiser does not know and cannot decide alone.
+    - value: risk
+      description: >
+        Something that could go wrong and no statement covers yet.
+    - value: objection
+      description: >
+        Disagreement with the statement or milestone as it stands. Also the kind
+        to use when retracting an approval.
+    - value: proposal
+      description: >
+        A concrete suggestion: a new statement, a rewording, a deliverable split,
+        a milestone. Only Peter writes it; this is how anyone else suggests it.
+    - value: staffing
+      description: >
+        A request to bring another agent in. Goes to the human with the trigger
+        and the cost.
+      must_address: human
+      via_tool: at-staff
+
+  concern_statuses:
+    - value: open
+      description: With its addressee, or with its raiser to judge an answer.
+    - value: closed
+      description: The raiser accepted an answer, or the human marked their answer final.
+
+  # judged — the raiser gives a verdict on it (a reassignment is a hand-off, never judged)
+  answer_kinds:
+    - value: answer
+      description: A reply in words. Goes back to the raiser for a verdict.
+      judged: true
+    - value: reassign
+      description: >
+        A hand-off to another agent, with why. The raiser still judges the
+        eventual answer.
+
+  #   closes      — this verdict closes the concern
+  #   needs_reply — the raiser must say what is still missing
+  #   human_only  — only the human may give it (on their own answer)
+  verdicts:
+    - value: accepted
+      description: The raiser is satisfied. Closes the concern.
+      closes: true
+    - value: replied
+      description: Not yet. The reply says what is missing; the concern goes back.
+      needs_reply: true
+    - value: final
+      description: The human marks their own answer final. Closes the concern as accepted.
+      closes: true
+      human_only: true
+
+  # What Peter did with a closed concern on a statement.
+  concern_outcomes:
+    - value: changed
+      description: Statements were written, superseded, moved or cancelled because of it.
+    - value: kept
+      description: Considered; no change needed. Shown under "Kept as is".
+
+  deliverable_statuses:
+    - value: live
+      description: In play. Its statements are being agreed or built.
+      live: true
+    - value: superseded
+      description: Split or reshaped into the deliverables that replaced it.
+      live: false
+    - value: cancelled
+      description: Dropped.
+      live: false
+
+  milestone_statuses:
+    - value: planned
+      description: Written; waiting for the slicing review and the buildability check.
+    - value: building
+      description: The developer is implementing it on its branch.
+    - value: blocked
+      description: A statement in it is no longer agreed. Nothing is built on a guess.
+    - value: in_review
+      description: With QA and code review. Concerns on it go to the developer.
+    - value: merged
+      description: No concern on it is open and it is merged. Waiting for the human to try it.
+    - value: accepted
+      description: The human tried it and is satisfied.
+
+  turn_statuses:
+    - value: running
+      description: The agent is taking its turn now.
+    - value: done
+      description: Finished, with a summary.
+    - value: skipped
+      description: The agent had nothing in its queue.
+
+  project_statuses:
+    - value: running
+      description: Turns are being taken.
+    - value: paused
+      description: Waiting for the human — a concern addressed to them, or a report.
+    - value: converged
+      description: Phase 1's end condition holds.
+    - value: done
+      description: The human has stopped asking for milestones.
+
+# -------------------------------------------------------------- the roster
+#
+#   seq            — turn order within a round; Peter goes last
+#   approves       — must approve every live statement
+#   phases         — the pipeline phases this agent takes part in
+#   joins_at_phase — the earliest phase it can be staffed into
+#   join_trigger   — what has to appear before it is worth staffing
+#   owns / rules_on / reviews / checks — its duties, enforced by the tools
+
+agents:
+
+  - id: 1
+    name: The Human
+    role: human
+    motivation: >
+      Owns the goal. Answers what no one else can, and settles stuck threads.
+    seq: 0
+    approves: false
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    rules_on: [staffing, acceptance]
+    active: true
+    joined_round: 1
+
+  - id: 2
+    name: Peter the Project Manager
+    role: pm
+    motivation: >
+      Does this still serve the goals? Interviews the human, is the only writer
+      of statements, deliverables and milestones, and acts on settled concerns.
+    charter: agents/pm.md
+    seq: 99
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    owns: [interview, statements, deliverables, milestones, escalation, reporting]
+    active: true
+    joined_round: 1
+
+  - id: 3
+    name: Tina the Time-to-Market
+    role: ttm
+    motivation: >
+      Ship something useful sooner. Resists gold-plating, argues for splitting
+      deliverables, and proposes milestones.
+    charter: agents/ttm.md
+    seq: 10
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: a first feature list exists
+    join_rationale: >
+      Her question — what would you ship first if you could have only one thing
+      — shapes the interview rather than following it.
+    owns: [milestone_proposals]
+
+  - id: 4
+    name: Arty the Architect
+    role: architect
+    motivation: >
+      Will this hold together, and what must the first version not preclude?
+    charter: agents/architect.md
+    seq: 20
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: a first feature list exists
+    join_rationale: >
+      Deliberately early: invariants decided after the features are settled
+      mean rework.
+    owns: [architecture]
+    reviews: [slicing]
+
+  - id: 5
+    name: Quinn the QA
+    role: qa
+    motivation: What breaks it? Turns corner cases into statements, then tests.
+    charter: agents/qa.md
+    seq: 30
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: features are concrete
+    join_rationale: >
+      Corner cases usually surface missing features the human has to rule on,
+      so they are worth finding before the architecture, not after.
+    owns: [testing]
+
+  - id: 6
+    name: Ian the Infosec
+    role: infosec
+    motivation: Who can see or do what they should not?
+    charter: agents/infosec.md
+    seq: 40
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: personal data, login or permissions appear
+    join_rationale: >
+      Needs something concrete to attack. Before that he can only produce
+      generic warnings that cost tokens every round.
+
+  - id: 7
+    name: Carla the Compliance Officer
+    role: compliance
+    motivation: What do law, regulation and policy demand — retention, privacy, audit?
+    charter: agents/compliance.md
+    seq: 50
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: regulated data appears (personal, time off, pay, medical, EU staff)
+    join_rationale: >
+      Expensive in constraints. The human should get to weigh the triggering
+      statement against the cost of a compliance pass before she joins.
+
+  - id: 8
+    name: Otto the Ops
+    role: sre
+    motivation: Will it survive real load, and can it be run and recovered?
+    charter: agents/sre.md
+    seq: 60
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: scale, refresh frequency or uptime expectations appear
+    join_rationale: Needs numbers to reason about.
+
+  - id: 9
+    name: Uma the UX
+    role: ux
+    motivation: Can a real person actually accomplish the task?
+    charter: agents/ux.md
+    seq: 70
+    approves: true
+    phases: [1, 2, 3, 4]
+    joins_at_phase: 1
+    join_trigger: the interface is more than a list or a form
+    join_rationale: Needs screens or workflows to critique.
+
+  - id: 10
+    name: Dana the Developer
+    role: developer
+    motivation: Build exactly this milestone, against its file.
+    charter: agents/developer.md
+    seq: 80
+    approves: true
+    phases: [3, 4]
+    joins_at_phase: 3
+    join_trigger: milestones are written
+    join_rationale: >
+      Joining means approving every live statement, which is her buildability
+      check: ambiguities surface before any code exists.
+    owns: [code]
+    checks: [buildability]
+
+  - id: 11
+    name: Rita the Reviewer
+    role: reviewer
+    motivation: Is the implementation sound — quality, security, design?
+    charter: agents/reviewer.md
+    seq: 90
+    approves: false
+    phases: [4]
+    joins_at_phase: 4
+    join_trigger: a milestone is in review
+    join_rationale: Reviews code, not statements.
+    owns: [code_review]

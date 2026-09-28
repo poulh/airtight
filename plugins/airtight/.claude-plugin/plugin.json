@@ -1,0 +1,7 @@
+{
+  "name": "airtight",
+  "description": "You can't code autonomously if you don't have airtight requirements. A panel of specialist agents argues your idea into unanimously agreed requirements before any code is written, then builds it one milestone at a time.",
+  "version": "0.1.0",
+  "author": { "name": "Poul Hornsleth" },
+  "keywords": ["requirements", "specification", "multi-agent", "planning"]
+}

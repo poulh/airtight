@@ -5,7 +5,7 @@ tables it changed — new rows marked, changed cells shown as old → new. Run i
 after changing the tools; if a step no longer behaves as the story says, it
 stops with the command's output.
 
-    .venv/bin/python examples/walkthrough.py
+    python3 examples/walkthrough.py   (after ./setup.sh)
 """
 
 import os
@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs" / "walkthrough.md"
 DB = str(Path(tempfile.mkdtemp()) / "project.db")
-ENV = dict(os.environ, CP_DB=DB, PATH=f"{ROOT / '.venv' / 'bin'}:{os.environ['PATH']}")
+ENV = dict(os.environ, AT_DB=DB, PATH=f"{ROOT / 'plugins' / 'airtight' / 'bin'}:{os.environ['PATH']}")
 
 TABLES = {
     "statements": ("SELECT id, kind, status, deliverable_id AS D, text FROM statements", 1),
@@ -65,7 +65,7 @@ def step(title, *commands, expect_refusal=None):
     before = snapshot()
     lines.append(f"### {title}\n")
     for command in commands:
-        # A command may carry text its output must contain: ("cp-turn next", "T-4 pm").
+        # A command may carry text its output must contain: ("at-turn next", "T-4 pm").
         command, must = command if isinstance(command, tuple) else (command, None)
         run = subprocess.run(command, shell=True, env=ENV, capture_output=True, text=True, cwd=ROOT)
         output = (run.stdout + run.stderr).strip()
@@ -97,13 +97,13 @@ def step(title, *commands, expect_refusal=None):
 
 def turn(role, summary, *commands):
     """One agent's whole turn: open it, act, close it with a summary."""
-    step(f"{role}'s turn", ("cp-turn next", f" {role} (round"), *commands,
-         f"cp-turn end --agent {role} --summary {shlex.quote(summary)}")
+    step(f"{role}'s turn", ("at-turn next", f" {role} (round"), *commands,
+         f"at-turn end --agent {role} --summary {shlex.quote(summary)}")
 
 
 def human(summary, *commands):
-    step("the human's turn", "cp-turn start --agent human", *commands,
-         f"cp-turn end --agent human --summary {shlex.quote(summary)}")
+    step("the human's turn", "at-turn start --agent human", *commands,
+         f"at-turn end --agent human --summary {shlex.quote(summary)}")
 
 
 lines += ["# Walkthrough: one statement's life",
@@ -113,96 +113,96 @@ lines += ["# Walkthrough: one statement's life",
 
 lines.append("## Round 1 — the brief and the interview\n")
 step("the human gives the brief",
-     "cp-init --brief 'An employee hub where staff request leave and managers approve it.'")
+     "at-init --brief 'An employee hub where staff request leave and managers approve it.'")
 turn("pm", "Asked the human who approves leave and what happens on silence.",
-     "cp-concern --from pm --to human --kind question --on S-1 "
+     "at-concern --from pm --to human --kind question --on S-1 "
      "--body 'Who approves a request, and what happens if they never respond?'")
-step("the loop is paused for the human", "cp-turn next", expect_refusal="paused on C-1")
+step("the loop is paused for the human", "at-turn next", expect_refusal="paused on C-1")
 human("Answered who approves leave.",
-      "cp-answer --concern C-1 --from human --body 'The employee'\"'\"'s manager. "
+      "at-answer --concern C-1 --from human --body 'The employee'\"'\"'s manager. "
       "Nobody should wait more than a week.'")
-step("round 1 ends", ("cp-turn next", "round 1 complete"), "cp-round --advance")
+step("round 1 ends", ("at-turn next", "round 1 complete"), "at-round --advance")
 
 lines.append("## Round 2 — Peter turns the brief into statements, and asks for help\n")
 turn("pm", "Superseded the brief into a goal, a criterion, v1 scope and the approval rule; "
      "asked for Arty, Quinn and Uma.",
-     "cp-review --answer A-1 --by pm --verdict accepted",
-     """cp-statement supersede --by pm --old S-1 --because C-1 \
+     "at-review --answer A-1 --by pm --verdict accepted",
+     """at-statement supersede --by pm --old S-1 --because C-1 \
 --new '{"kind":"goal","text":"Staff always know where their leave request stands."}' \
 --new '{"kind":"scope","deliverable":"D-1","text":"Requesting leave, and approving or declining it."}' \
 --new '{"kind":"functional","deliverable":"D-1","text":"A manager approves or declines each leave request."}'""",
-     "cp-statement add --by pm --kind success_criterion --measures S-2 --because C-1 "
+     "at-statement add --by pm --kind success_criterion --measures S-2 --because C-1 "
      "--text 'No request waits more than 5 working days for a decision.'",
-     "cp-approve --agent pm --statement S-2", "cp-approve --agent pm --statement S-3",
-     "cp-approve --agent pm --statement S-4", "cp-approve --agent pm --statement S-5",
-     "cp-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'",
-     "cp-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'",
-     "cp-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'")
+     "at-approve --agent pm --statement S-2", "at-approve --agent pm --statement S-3",
+     "at-approve --agent pm --statement S-4", "at-approve --agent pm --statement S-5",
+     "at-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'",
+     "at-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'",
+     "at-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'")
 human("Approved Arty, Quinn and Uma.",
-      "cp-staff approve --agent architect --concern C-2",
-      "cp-staff approve --agent qa --concern C-3",
-      "cp-staff approve --agent ux --concern C-4")
+      "at-staff approve --agent architect --concern C-2",
+      "at-staff approve --agent qa --concern C-3",
+      "at-staff approve --agent ux --concern C-4")
 
 lines.append("## Round 2, continued — the new agents review everything\n")
 turn("architect", "Approved the goal, criterion and scope; asked what happens when a manager "
      "never decides.",
-     "cp-approve --agent architect --statement S-2", "cp-approve --agent architect --statement S-3",
-     "cp-approve --agent architect --statement S-5",
-     "cp-concern --from architect --to pm --kind question --on S-4 "
+     "at-approve --agent architect --statement S-2", "at-approve --agent architect --statement S-3",
+     "at-approve --agent architect --statement S-5",
+     "at-concern --from architect --to pm --kind question --on S-4 "
      "--body 'What happens if the manager does nothing for 5 working days?'")
 turn("qa", "Approved the goal, criterion and scope; asked whether managers approve from a phone.",
-     "cp-approve --agent qa --statement S-2", "cp-approve --agent qa --statement S-3",
-     "cp-approve --agent qa --statement S-5",
-     "cp-concern --from qa --to ux --kind question --on S-4 "
+     "at-approve --agent qa --statement S-2", "at-approve --agent qa --statement S-3",
+     "at-approve --agent qa --statement S-5",
+     "at-concern --from qa --to ux --kind question --on S-4 "
      "--body 'Can a manager approve from their phone?'")
 turn("ux", "Approved everything; handed the phone question to Arty.",
-     "cp-approve --agent ux --statement S-2", "cp-approve --agent ux --statement S-3",
-     "cp-approve --agent ux --statement S-4", "cp-approve --agent ux --statement S-5",
-     "cp-answer --concern C-6 --from ux --reassign-to architect "
+     "at-approve --agent ux --statement S-2", "at-approve --agent ux --statement S-3",
+     "at-approve --agent ux --statement S-4", "at-approve --agent ux --statement S-5",
+     "at-answer --concern C-6 --from ux --reassign-to architect "
      "--body 'Whether the approve screen works on a phone is an architecture call.'")
-step("round 2 ends", ("cp-turn next", "round 2 complete"), "cp-round --advance")
+step("round 2 ends", ("at-turn next", "round 2 complete"), "at-round --advance")
 
 lines.append("## Round 3 — answers go back and forth\n")
 turn("architect", "Answered the phone question Uma handed me.",
-     "cp-answer --concern C-6 --from architect --body 'Yes: the approve screen is responsive.'")
+     "at-answer --concern C-6 --from architect --body 'Yes: the approve screen is responsive.'")
 turn("qa", "Accepted Arty's answer on phones.",
-     "cp-review --answer A-6 --by qa --verdict accepted")
+     "at-review --answer A-6 --by qa --verdict accepted")
 turn("pm", "Answered Arty on escalation; kept the three staffing requests.",
-     "cp-answer --concern C-5 --from pm "
+     "at-answer --concern C-5 --from pm "
      "--body 'It goes to the manager'\"'\"'s manager after 5 working days.'",
-     "cp-statement keep --by pm --because C-2,C-3,C-4")
-step("round 3 ends", ("cp-turn next", "round 3 complete"), "cp-round --advance")
+     "at-statement keep --by pm --because C-2,C-3,C-4")
+step("round 3 ends", ("at-turn next", "round 3 complete"), "at-round --advance")
 
 lines.append("## Round 4 — Arty accepts; Peter acts on both concerns together\n")
 turn("architect", "Accepted the escalation answer; approved S-4 as it stands.",
-     "cp-review --answer A-7 --by architect --verdict accepted",
-     "cp-approve --agent architect --statement S-4")
+     "at-review --answer A-7 --by architect --verdict accepted",
+     "at-approve --agent architect --statement S-4")
 turn("qa", "My phone question is settled; approved S-4.",
-     "cp-approve --agent qa --statement S-4")
-step("Peter's turn opens", ("cp-turn next", " pm (round"), "cp-queue --agent pm")
+     "at-approve --agent qa --statement S-4")
+step("Peter's turn opens", ("at-turn next", " pm (round"), "at-queue --agent pm")
 step("Peter cannot rewrite S-4 while one of its closed concerns is unconsidered",
-     """cp-statement supersede --by pm --old S-4 --because C-5 \
+     """at-statement supersede --by pm --old S-4 --because C-5 \
 --new '{"text":"A manager approves or declines each leave request."}'""",
      expect_refusal="C-6")
 step("so Peter keeps C-6 (no change needed) and rewrites S-4 because of C-5",
-     "cp-statement keep --by pm --because C-6",
-     """cp-statement supersede --by pm --old S-4 --because C-5 \
+     "at-statement keep --by pm --because C-6",
+     """at-statement supersede --by pm --old S-4 --because C-5 \
 --new '{"text":"A manager approves or declines each leave request."}' \
 --new '{"text":"A request with no decision after 5 working days goes to the manager'"'"'s manager."}'""",
-     "cp-approve --agent pm --statement S-6", "cp-approve --agent pm --statement S-7",
-     "cp-turn end --agent pm --summary 'Split S-4 into the approval rule and the escalation rule "
+     "at-approve --agent pm --statement S-6", "at-approve --agent pm --statement S-7",
+     "at-turn end --agent pm --summary 'Split S-4 into the approval rule and the escalation rule "
      "(C-5); kept C-6.'")
-step("round 4 ends", ("cp-turn next", "round 4 complete"), "cp-round --advance")
+step("round 4 ends", ("at-turn next", "round 4 complete"), "at-round --advance")
 
 lines.append("## Round 5 — everyone approves the replacements, and phase 1 converges\n")
 for role in ("architect", "qa", "ux"):
     turn(role, "Approved S-6 and S-7.",
-         f"cp-approve --agent {role} --statement S-6", f"cp-approve --agent {role} --statement S-7")
-step("nothing left for anyone", "cp-turn next", "cp-state")
+         f"at-approve --agent {role} --statement S-6", f"at-approve --agent {role} --statement S-7")
+step("nothing left for anyone", "at-turn next", "at-state")
 
-render = subprocess.run("cp-render requirements", shell=True, env=ENV, capture_output=True,
+render = subprocess.run("at-render requirements", shell=True, env=ENV, capture_output=True,
                         text=True, cwd=ROOT).stdout
-lines += ["## The printout: `cp-render requirements`", "", "```markdown", render.rstrip(), "```", ""]
+lines += ["## The printout: `at-render requirements`", "", "```markdown", render.rstrip(), "```", ""]
 
 OUT.parent.mkdir(exist_ok=True)
 OUT.write_text("\n".join(lines) + "\n")

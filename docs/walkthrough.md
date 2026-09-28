@@ -7,8 +7,8 @@
 ### the human gives the brief
 
 ```
-$ cp-init --brief 'An employee hub where staff request leave and managers approve it.'
-created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpufthuwt6/project.db
+$ at-init --brief 'An employee hub where staff request leave and managers approve it.'
+created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpcq_wqq4j/project.db
   phases:       4
   policy:       3 settings
   vocabularies: 44 values across 12 tables
@@ -53,18 +53,18 @@ created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpufthuwt6/project.db
 ### pm's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-2 pm (round 1)
 ```
 
 ```
-$ cp-concern --from pm --to human --kind question --on S-1 --body 'Who approves a request, and what happens if they never respond?'
+$ at-concern --from pm --to human --kind question --on S-1 --body 'Who approves a request, and what happens if they never respond?'
 C-1 raised by Peter the Project Manager to The Human [question] on S-1
 the loop pauses until the human answers
 ```
 
 ```
-$ cp-turn end --agent pm --summary 'Asked the human who approves leave and what happens on silence.'
+$ at-turn end --agent pm --summary 'Asked the human who approves leave and what happens on silence.'
 T-2 (pm) done
 ```
 
@@ -91,8 +91,8 @@ T-2 (pm) done
 ### the loop is paused for the human
 
 ```
-$ cp-turn next
-refused: paused on C-1: it is the human's turn — cp-turn start --agent human
+$ at-turn next
+refused: paused on C-1: it is the human's turn — at-turn start --agent human
 ```
 
 *Unchanged: statements, links, statement_reasons, approvals, concerns, answers, deliverables, agents, turns, project_state.*
@@ -100,17 +100,17 @@ refused: paused on C-1: it is the human's turn — cp-turn start --agent human
 ### the human's turn
 
 ```
-$ cp-turn start --agent human
+$ at-turn start --agent human
 T-3 human
 ```
 
 ```
-$ cp-answer --concern C-1 --from human --body 'The employee'"'"'s manager. Nobody should wait more than a week.'
+$ at-answer --concern C-1 --from human --body 'The employee'"'"'s manager. Nobody should wait more than a week.'
 A-1 answers C-1 — with Peter the Project Manager for a verdict
 ```
 
 ```
-$ cp-turn end --agent human --summary 'Answered who approves leave.'
+$ at-turn end --agent human --summary 'Answered who approves leave.'
 T-3 (human) done
 ```
 
@@ -137,12 +137,12 @@ T-3 (human) done
 ### round 1 ends
 
 ```
-$ cp-turn next
-round 1 complete — cp-round --advance
+$ at-turn next
+round 1 complete — at-round --advance
 ```
 
 ```
-$ cp-round --advance
+$ at-round --advance
 round 1 -> 2
 ```
 
@@ -159,62 +159,62 @@ round 1 -> 2
 ### pm's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-4 pm (round 2)
 ```
 
 ```
-$ cp-review --answer A-1 --by pm --verdict accepted
+$ at-review --answer A-1 --by pm --verdict accepted
 A-1 accepted; C-1 closed — waiting for Peter to act on it
 ```
 
 ```
-$ cp-statement supersede --by pm --old S-1 --because C-1 --new '{"kind":"goal","text":"Staff always know where their leave request stands."}' --new '{"kind":"scope","deliverable":"D-1","text":"Requesting leave, and approving or declining it."}' --new '{"kind":"functional","deliverable":"D-1","text":"A manager approves or declines each leave request."}'
+$ at-statement supersede --by pm --old S-1 --because C-1 --new '{"kind":"goal","text":"Staff always know where their leave request stands."}' --new '{"kind":"scope","deliverable":"D-1","text":"Requesting leave, and approving or declining it."}' --new '{"kind":"functional","deliverable":"D-1","text":"A manager approves or declines each leave request."}'
 S-1 superseded by S-2, S-3, S-4 — every approver reviews them
 ```
 
 ```
-$ cp-statement add --by pm --kind success_criterion --measures S-2 --because C-1 --text 'No request waits more than 5 working days for a decision.'
+$ at-statement add --by pm --kind success_criterion --measures S-2 --because C-1 --text 'No request waits more than 5 working days for a decision.'
 S-5 [success_criterion] written — every approver reviews it
 ```
 
 ```
-$ cp-approve --agent pm --statement S-2
+$ at-approve --agent pm --statement S-2
 S-2 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-approve --agent pm --statement S-3
+$ at-approve --agent pm --statement S-3
 S-3 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-approve --agent pm --statement S-4
+$ at-approve --agent pm --statement S-4
 S-4 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-approve --agent pm --statement S-5
+$ at-approve --agent pm --statement S-5
 S-5 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'
+$ at-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'
 C-2 staffing request for Arty the Architect -> The Human
 ```
 
 ```
-$ cp-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'
+$ at-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'
 C-3 staffing request for Quinn the QA -> The Human
 ```
 
 ```
-$ cp-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'
+$ at-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'
 C-4 staffing request for Uma the UX -> The Human
 ```
 
 ```
-$ cp-turn end --agent pm --summary 'Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma.'
+$ at-turn end --agent pm --summary 'Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma.'
 T-4 (pm) done
 ```
 
@@ -287,27 +287,27 @@ T-4 (pm) done
 ### the human's turn
 
 ```
-$ cp-turn start --agent human
+$ at-turn start --agent human
 T-5 human
 ```
 
 ```
-$ cp-staff approve --agent architect --concern C-2
+$ at-staff approve --agent architect --concern C-2
 Arty the Architect: approved. C-2 closed — Peter acts on it
 ```
 
 ```
-$ cp-staff approve --agent qa --concern C-3
+$ at-staff approve --agent qa --concern C-3
 Quinn the QA: approved. C-3 closed — Peter acts on it
 ```
 
 ```
-$ cp-staff approve --agent ux --concern C-4
+$ at-staff approve --agent ux --concern C-4
 Uma the UX: approved. C-4 closed — Peter acts on it
 ```
 
 ```
-$ cp-turn end --agent human --summary 'Approved Arty, Quinn and Uma.'
+$ at-turn end --agent human --summary 'Approved Arty, Quinn and Uma.'
 T-5 (human) done
 ```
 
@@ -362,32 +362,32 @@ T-5 (human) done
 ### architect's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-6 architect (round 2)
 ```
 
 ```
-$ cp-approve --agent architect --statement S-2
+$ at-approve --agent architect --statement S-2
 S-2 approved by Arty the Architect
 ```
 
 ```
-$ cp-approve --agent architect --statement S-3
+$ at-approve --agent architect --statement S-3
 S-3 approved by Arty the Architect
 ```
 
 ```
-$ cp-approve --agent architect --statement S-5
+$ at-approve --agent architect --statement S-5
 S-5 approved by Arty the Architect
 ```
 
 ```
-$ cp-concern --from architect --to pm --kind question --on S-4 --body 'What happens if the manager does nothing for 5 working days?'
+$ at-concern --from architect --to pm --kind question --on S-4 --body 'What happens if the manager does nothing for 5 working days?'
 C-5 raised by Arty the Architect to Peter the Project Manager [question] on S-4
 ```
 
 ```
-$ cp-turn end --agent architect --summary 'Approved the goal, criterion and scope; asked what happens when a manager never decides.'
+$ at-turn end --agent architect --summary 'Approved the goal, criterion and scope; asked what happens when a manager never decides.'
 T-6 (architect) done
 ```
 
@@ -416,32 +416,32 @@ T-6 (architect) done
 ### qa's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-7 qa (round 2)
 ```
 
 ```
-$ cp-approve --agent qa --statement S-2
+$ at-approve --agent qa --statement S-2
 S-2 approved by Quinn the QA
 ```
 
 ```
-$ cp-approve --agent qa --statement S-3
+$ at-approve --agent qa --statement S-3
 S-3 approved by Quinn the QA
 ```
 
 ```
-$ cp-approve --agent qa --statement S-5
+$ at-approve --agent qa --statement S-5
 S-5 approved by Quinn the QA
 ```
 
 ```
-$ cp-concern --from qa --to ux --kind question --on S-4 --body 'Can a manager approve from their phone?'
+$ at-concern --from qa --to ux --kind question --on S-4 --body 'Can a manager approve from their phone?'
 C-6 raised by Quinn the QA to Uma the UX [question] on S-4
 ```
 
 ```
-$ cp-turn end --agent qa --summary 'Approved the goal, criterion and scope; asked whether managers approve from a phone.'
+$ at-turn end --agent qa --summary 'Approved the goal, criterion and scope; asked whether managers approve from a phone.'
 T-7 (qa) done
 ```
 
@@ -470,37 +470,37 @@ T-7 (qa) done
 ### ux's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-8 ux (round 2)
 ```
 
 ```
-$ cp-approve --agent ux --statement S-2
+$ at-approve --agent ux --statement S-2
 S-2 approved by Uma the UX
 ```
 
 ```
-$ cp-approve --agent ux --statement S-3
+$ at-approve --agent ux --statement S-3
 S-3 approved by Uma the UX
 ```
 
 ```
-$ cp-approve --agent ux --statement S-4
+$ at-approve --agent ux --statement S-4
 S-4 approved by Uma the UX
 ```
 
 ```
-$ cp-approve --agent ux --statement S-5
+$ at-approve --agent ux --statement S-5
 S-5 approved by Uma the UX
 ```
 
 ```
-$ cp-answer --concern C-6 --from ux --reassign-to architect --body 'Whether the approve screen works on a phone is an architecture call.'
+$ at-answer --concern C-6 --from ux --reassign-to architect --body 'Whether the approve screen works on a phone is an architecture call.'
 A-5 reassigns C-6 to Arty the Architect
 ```
 
 ```
-$ cp-turn end --agent ux --summary 'Approved everything; handed the phone question to Arty.'
+$ at-turn end --agent ux --summary 'Approved everything; handed the phone question to Arty.'
 T-8 (ux) done
 ```
 
@@ -544,12 +544,12 @@ T-8 (ux) done
 ### round 2 ends
 
 ```
-$ cp-turn next
-round 2 complete — cp-round --advance
+$ at-turn next
+round 2 complete — at-round --advance
 ```
 
 ```
-$ cp-round --advance
+$ at-round --advance
 round 2 -> 3
 ```
 
@@ -566,17 +566,17 @@ round 2 -> 3
 ### architect's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-9 architect (round 3)
 ```
 
 ```
-$ cp-answer --concern C-6 --from architect --body 'Yes: the approve screen is responsive.'
+$ at-answer --concern C-6 --from architect --body 'Yes: the approve screen is responsive.'
 A-6 answers C-6 — with Quinn the QA for a verdict
 ```
 
 ```
-$ cp-turn end --agent architect --summary 'Answered the phone question Uma handed me.'
+$ at-turn end --agent architect --summary 'Answered the phone question Uma handed me.'
 T-9 (architect) done
 ```
 
@@ -597,17 +597,17 @@ T-9 (architect) done
 ### qa's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-10 qa (round 3)
 ```
 
 ```
-$ cp-review --answer A-6 --by qa --verdict accepted
+$ at-review --answer A-6 --by qa --verdict accepted
 A-6 accepted; C-6 closed — waiting for Peter to act on it
 ```
 
 ```
-$ cp-turn end --agent qa --summary 'Accepted Arty'"'"'s answer on phones.'
+$ at-turn end --agent qa --summary 'Accepted Arty'"'"'s answer on phones.'
 T-10 (qa) done
 ```
 
@@ -634,23 +634,23 @@ T-10 (qa) done
 ### pm's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 skipped (empty queue): ux
 T-12 pm (round 3)
 ```
 
 ```
-$ cp-answer --concern C-5 --from pm --body 'It goes to the manager'"'"'s manager after 5 working days.'
+$ at-answer --concern C-5 --from pm --body 'It goes to the manager'"'"'s manager after 5 working days.'
 A-7 answers C-5 — with Arty the Architect for a verdict
 ```
 
 ```
-$ cp-statement keep --by pm --because C-2,C-3,C-4
+$ at-statement keep --by pm --because C-2,C-3,C-4
 kept as is: C-2, C-3, C-4
 ```
 
 ```
-$ cp-turn end --agent pm --summary 'Answered Arty on escalation; kept the three staffing requests.'
+$ at-turn end --agent pm --summary 'Answered Arty on escalation; kept the three staffing requests.'
 T-12 (pm) done
 ```
 
@@ -680,12 +680,12 @@ T-12 (pm) done
 ### round 3 ends
 
 ```
-$ cp-turn next
-round 3 complete — cp-round --advance
+$ at-turn next
+round 3 complete — at-round --advance
 ```
 
 ```
-$ cp-round --advance
+$ at-round --advance
 round 3 -> 4
 ```
 
@@ -702,22 +702,22 @@ round 3 -> 4
 ### architect's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-13 architect (round 4)
 ```
 
 ```
-$ cp-review --answer A-7 --by architect --verdict accepted
+$ at-review --answer A-7 --by architect --verdict accepted
 A-7 accepted; C-5 closed — waiting for Peter to act on it
 ```
 
 ```
-$ cp-approve --agent architect --statement S-4
+$ at-approve --agent architect --statement S-4
 S-4 approved by Arty the Architect
 ```
 
 ```
-$ cp-turn end --agent architect --summary 'Accepted the escalation answer; approved S-4 as it stands.'
+$ at-turn end --agent architect --summary 'Accepted the escalation answer; approved S-4 as it stands.'
 T-13 (architect) done
 ```
 
@@ -750,17 +750,17 @@ T-13 (architect) done
 ### qa's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-14 qa (round 4)
 ```
 
 ```
-$ cp-approve --agent qa --statement S-4
+$ at-approve --agent qa --statement S-4
 S-4 approved by Quinn the QA
 ```
 
 ```
-$ cp-turn end --agent qa --summary 'My phone question is settled; approved S-4.'
+$ at-turn end --agent qa --summary 'My phone question is settled; approved S-4.'
 T-14 (qa) done
 ```
 
@@ -781,13 +781,13 @@ T-14 (qa) done
 ### Peter's turn opens
 
 ```
-$ cp-turn next
+$ at-turn next
 skipped (empty queue): ux
 T-16 pm (round 4)
 ```
 
 ```
-$ cp-queue --agent pm
+$ at-queue --agent pm
 Peter the Project Manager — round 4, phase 1 (Converge)
   you argue for: Does this still serve the goals? Interviews the human, is the only writer of statements, deliverables and milestones, and acts on settled concerns.
   your last turn (T-12): Answered Arty on escalation; kept the three staffing requests.
@@ -796,13 +796,13 @@ IN FORCE (project-wide)
   S-2 [goal, agreed] Staff always know where their leave request stands.
   S-5 [success_criterion, agreed] No request waits more than 5 working days for a decision.
 
-ANSWERS TO JUDGE (0) — cp-review
+ANSWERS TO JUDGE (0) — at-review
 
-CONCERNS TO ANSWER (0) — cp-answer
+CONCERNS TO ANSWER (0) — at-answer
 
-STATEMENTS TO REVIEW (0) — cp-approve, or cp-concern
+STATEMENTS TO REVIEW (0) — at-approve, or at-concern
 
-READY TO ACT ON (1) — cp-statement, cp-deliverable, cp-milestone, or raise a new concern
+READY TO ACT ON (1) — at-statement, at-deliverable, at-milestone, or raise a new concern
   S-4 [functional, D-1, pending] A manager approves or declines each leave request.
        C-5 [question] from architect: What happens if the manager does nothing for 5 working days?
          ↳ pm (accepted): It goes to the manager's manager after 5 working days.
@@ -822,8 +822,8 @@ READY TO ACT ON (1) — cp-statement, cp-deliverable, cp-milestone, or raise a n
 ### Peter cannot rewrite S-4 while one of its closed concerns is unconsidered
 
 ```
-$ cp-statement supersede --by pm --old S-4 --because C-5 --new '{"text":"A manager approves or declines each leave request."}'
-refused: S-4 has closed concerns you have not considered: C-6 — cite them, or cp-statement keep them first
+$ at-statement supersede --by pm --old S-4 --because C-5 --new '{"text":"A manager approves or declines each leave request."}'
+refused: S-4 has closed concerns you have not considered: C-6 — cite them, or at-statement keep them first
 ```
 
 *Unchanged: statements, links, statement_reasons, approvals, concerns, answers, deliverables, agents, turns, project_state.*
@@ -831,27 +831,27 @@ refused: S-4 has closed concerns you have not considered: C-6 — cite them, or 
 ### so Peter keeps C-6 (no change needed) and rewrites S-4 because of C-5
 
 ```
-$ cp-statement keep --by pm --because C-6
+$ at-statement keep --by pm --because C-6
 kept as is: C-6
 ```
 
 ```
-$ cp-statement supersede --by pm --old S-4 --because C-5 --new '{"text":"A manager approves or declines each leave request."}' --new '{"text":"A request with no decision after 5 working days goes to the manager'"'"'s manager."}'
+$ at-statement supersede --by pm --old S-4 --because C-5 --new '{"text":"A manager approves or declines each leave request."}' --new '{"text":"A request with no decision after 5 working days goes to the manager'"'"'s manager."}'
 S-4 superseded by S-6, S-7 — every approver reviews them
 ```
 
 ```
-$ cp-approve --agent pm --statement S-6
+$ at-approve --agent pm --statement S-6
 S-6 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-approve --agent pm --statement S-7
+$ at-approve --agent pm --statement S-7
 S-7 approved by Peter the Project Manager
 ```
 
 ```
-$ cp-turn end --agent pm --summary 'Split S-4 into the approval rule and the escalation rule (C-5); kept C-6.'
+$ at-turn end --agent pm --summary 'Split S-4 into the approval rule and the escalation rule (C-5); kept C-6.'
 T-16 (pm) done
 ```
 
@@ -902,12 +902,12 @@ T-16 (pm) done
 ### round 4 ends
 
 ```
-$ cp-turn next
-round 4 complete — cp-round --advance
+$ at-turn next
+round 4 complete — at-round --advance
 ```
 
 ```
-$ cp-round --advance
+$ at-round --advance
 round 4 -> 5
 ```
 
@@ -924,22 +924,22 @@ round 4 -> 5
 ### architect's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-17 architect (round 5)
 ```
 
 ```
-$ cp-approve --agent architect --statement S-6
+$ at-approve --agent architect --statement S-6
 S-6 approved by Arty the Architect
 ```
 
 ```
-$ cp-approve --agent architect --statement S-7
+$ at-approve --agent architect --statement S-7
 S-7 approved by Arty the Architect
 ```
 
 ```
-$ cp-turn end --agent architect --summary 'Approved S-6 and S-7.'
+$ at-turn end --agent architect --summary 'Approved S-6 and S-7.'
 T-17 (architect) done
 ```
 
@@ -961,22 +961,22 @@ T-17 (architect) done
 ### qa's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-18 qa (round 5)
 ```
 
 ```
-$ cp-approve --agent qa --statement S-6
+$ at-approve --agent qa --statement S-6
 S-6 approved by Quinn the QA
 ```
 
 ```
-$ cp-approve --agent qa --statement S-7
+$ at-approve --agent qa --statement S-7
 S-7 approved by Quinn the QA
 ```
 
 ```
-$ cp-turn end --agent qa --summary 'Approved S-6 and S-7.'
+$ at-turn end --agent qa --summary 'Approved S-6 and S-7.'
 T-18 (qa) done
 ```
 
@@ -998,22 +998,22 @@ T-18 (qa) done
 ### ux's turn
 
 ```
-$ cp-turn next
+$ at-turn next
 T-19 ux (round 5)
 ```
 
 ```
-$ cp-approve --agent ux --statement S-6
+$ at-approve --agent ux --statement S-6
 S-6 approved by Uma the UX
 ```
 
 ```
-$ cp-approve --agent ux --statement S-7
+$ at-approve --agent ux --statement S-7
 S-7 approved by Uma the UX
 ```
 
 ```
-$ cp-turn end --agent ux --summary 'Approved S-6 and S-7.'
+$ at-turn end --agent ux --summary 'Approved S-6 and S-7.'
 T-19 (ux) done
 ```
 
@@ -1048,18 +1048,18 @@ T-19 (ux) done
 ### nothing left for anyone
 
 ```
-$ cp-turn next
+$ at-turn next
 skipped (empty queue): pm
-round 5 complete — cp-round --advance
+round 5 complete — at-round --advance
 ```
 
 ```
-$ cp-state
+$ at-state
 round 5, phase 1 (Converge) — converged
   ends when:    Every live statement is agreed, no concern is open, and Peter has acted on every closed concern.
   active:       human, architect, qa, ux, pm
   turn:         none running
-  left:         nobody — cp-round --advance
+  left:         nobody — at-round --advance
   statements:   5 agreed, 2 superseded
   concerns:     0 open, 0 closed and waiting for Peter
 ```
@@ -1072,7 +1072,7 @@ round 5, phase 1 (Converge) — converged
 
 *Unchanged: statements, links, statement_reasons, approvals, concerns, answers, deliverables, agents, project_state.*
 
-## The printout: `cp-render requirements`
+## The printout: `at-render requirements`
 
 ```markdown
 # Requirements
