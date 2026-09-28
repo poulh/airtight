@@ -4,7 +4,21 @@ A Claude Code skill (planned, not built yet) that turns a project idea into conv
 requirements, an architecture, deliverables and milestone files before any code gets written.
 It then builds one milestone at a time. `convergence-pipeline.md` holds the full design.
 
-## Where things stand (2026-09-26)
+## Redesign in progress (2026-09-27)
+
+`convergence-pipeline.md` now specifies a **redesigned model**, agreed with the human in an
+interview: requirements are the only shared object, every agent approves each one or raises a
+concern on it, concerns are always on one requirement, only Peter writes requirements (from
+closed concerns, citing them), changes supersede into new rows via a lineage table, the brief
+is R-1, deliverables start as D-1 and are superseded rather than renamed, goals are
+project-wide and only change through a concern the human answered, and there is no Scribe.
+
+**The spec wins where it disagrees with this file.** "Settled decisions" and the tool table
+below describe the *previous* model, which is what the code still implements. Next step: the
+human reviews the spec, then the schema, `pipeline.yaml`, tools, charters and skill are
+rebuilt to match.
+
+## Where things stand (2026-09-26, previous model)
 
 - Working: `schema.sql`, `pipeline.yaml`, the `convergence` package, `pyproject.toml`,
   `setup.sh`, and the eleven agent charters in `.claude/agents/` plus `protocol.md`. All
@@ -129,8 +143,7 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 
 ## Next steps
 
-1. Write `cp-render milestone` and the `milestone-N.md` template (only `cp-render
-   requirements` exists).
-2. Extend the employee-hub walkthrough through phase 3 so `cp-deliverable` and
-   `cp-milestone` are tested the way the phase 1–2 tools are.
-3. Dry-run phase 1 on one real, low-stakes project.
+1. The human reviews the redesign in `convergence-pipeline.md` and settles its *Open* list.
+2. Rebuild `schema.sql`, `pipeline.yaml`, the tools, the charters and the skill to the spec;
+   rerun the one-requirement walkthrough against the real tools.
+3. Then `cp-render milestone` and a dry run of phase 1 on a real, low-stakes project.
