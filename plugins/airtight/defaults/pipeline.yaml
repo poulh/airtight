@@ -15,6 +15,9 @@
 # charters, the skill and the database, and reports anything that has drifted.
 
 # ---------------------------------------------------------------- the phases
+#
+#   needs — duties some active agent must hold before the project may enter the
+#           phase; at-round --phase refuses otherwise and names who to staff
 
 phases:
   - number: 1
@@ -29,6 +32,7 @@ phases:
     ends_when: >
       architecture.md is written against the whole agreed statement set, and
       every statement it led to is agreed.
+    needs: [architecture]
   - number: 3
     key: slice
     name: Slice
@@ -36,11 +40,13 @@ phases:
       Every agreed requirement of the first deliverable is in a milestone, the
       architect has passed the slicing, and the developer has checked every
       milestone.
+    needs: [milestones, milestone_proposals, slicing, buildability]
   - number: 4
     key: build
     name: Build
     ends_when: >
       The human stops asking for the next milestone.
+    needs: [code, testing, code_review, acceptance]
 
 # --------------------------------------------------------------- the numbers
 
@@ -55,6 +61,13 @@ policy:
     description: >
       Replies on one concern over its whole life before the report flags it as
       bouncing. This count never resets.
+  - key: auto_approve_staffing
+    value: 0
+    description: >
+      1 means a staffing request is approved as soon as it is made: the agent
+      joins at once, and the next report lists who joined and why. 0 means each
+      request waits for the human's yes or no, which pauses the loop.
+      /airtight:setup asks which the human wants.
   - key: report_every_rounds
     value: 10
     description: >
@@ -80,6 +93,10 @@ duties:
       agreed requirements split into milestones.
   - value: escalation
     description: Sending a stuck concern to the human early, with both positions.
+  - value: recruiting
+    description: >
+      Watching who is not yet on the project: asking the human to staff an agent
+      when its trigger appears, or recording why the project does not need it.
   - value: reporting
     description: Running the periodic report to the human, which pauses the loop.
   - value: staffing
@@ -357,7 +374,7 @@ agents:
     approves: true
     phases: [1, 2, 3, 4]
     joins_at_phase: 1
-    owns: [interview, statements, deliverables, milestones, escalation, reporting]
+    owns: [interview, statements, deliverables, milestones, escalation, reporting, recruiting]
     active: true
     joined_round: 1
 

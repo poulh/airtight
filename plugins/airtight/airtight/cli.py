@@ -76,6 +76,8 @@ def init_main():
     parser.add_argument("--schema", default=str(cfg.DEFAULT_SCHEMA))
     parser.add_argument("--scaffold", action="store_true",
                         help=f"copy the default pipeline.yaml into {cfg.PROJECT_DIR}/ and validate it")
+    parser.add_argument("--auto-staff", choices=["yes", "no"],
+                        help="with --scaffold: approve staffing requests automatically, or ask")
     parser.add_argument("--brief", help="the human's idea, verbatim")
     parser.add_argument("--deliverable", default="v1", help="name of the first deliverable")
     parser.add_argument("--force", action="store_true", help="replace an existing database")
@@ -89,6 +91,11 @@ def init_main():
         else:
             cfg.PROJECT_CONFIG.write_text(cfg.DEFAULT_CONFIG.read_text())
             print(f"copied the default config to {cfg.PROJECT_CONFIG}")
+        if args.auto_staff:
+            cfg.set_policy(cfg.PROJECT_CONFIG, "auto_approve_staffing",
+                           1 if args.auto_staff == "yes" else 0)
+            print("staffing requests: " + ("approved automatically" if args.auto_staff == "yes"
+                                           else "each one asks the human"))
         args.config, args.check = str(cfg.PROJECT_CONFIG), True
 
     configuration = cfg.load(args.config)
@@ -117,8 +124,9 @@ def init_main():
     conn.executescript(Path(args.schema).read_text())
 
     conn.executemany(
-        "INSERT INTO phases (number, key, name, ends_when) VALUES (?, ?, ?, ?)",
-        [(p["number"], p["key"], p["name"], p["ends_when"].strip())
+        "INSERT INTO phases (number, key, name, ends_when, needs) VALUES (?, ?, ?, ?, ?)",
+        [(p["number"], p["key"], p["name"], p["ends_when"].strip(),
+          ",".join(p.get("needs") or []) or None)
          for p in configuration["phases"]],
     )
     conn.executemany(
@@ -360,6 +368,10 @@ def queue_main():
                 "homeless": [dict(r) for r in q["homeless"]],
                 "orphaned": [dict(r) for r in q["orphans"]],
                 "stuck": [dict(r) for r in q["stuck"]],
+                "on_the_project": [{"role": a["role"], "name": a["name"]} for a in q["roster"]],
+                "not_yet_on_the_project": [
+                    {"role": a["role"], "name": a["name"], "joins_when": a["join_trigger"],
+                     "joins_at_phase": a["joins_at_phase"]} for a in q["unstaffed"]],
                 "report_due": q["report_due"],
                 "milestones": q["milestones"],
                 "reports_to_continue": [dict(r) for r in q["reports"]],
@@ -371,6 +383,9 @@ def queue_main():
         if q["last_summary"]:
             print(f"  your last turn (T-{q['last_summary']['id']}): "
                   f"{q['last_summary']['summary'].strip()}")
+
+        print("\nON THE PROJECT: " + ", ".join(
+            f"{a['name']} [{a['role']}]" for a in q["roster"]))
 
         print("\nIN FORCE (project-wide)")
         for row in in_force:
@@ -427,6 +442,15 @@ def queue_main():
                 print(f"\nMISSING A LINK ({len(q['orphans'])}) — what they point at was retired")
                 for row in q["orphans"]:
                     print(f"  {show(conn, row)}")
+        if q["unstaffed"]:
+            print(f"\nNOT YET ON THE PROJECT ({len(q['unstaffed'])}) — when a trigger has "
+                  "appeared, at-staff request; if the project will never need them, at-staff pass "
+                  "with the reason")
+            for a in q["unstaffed"]:
+                soon = (f" (joins at phase {a['joins_at_phase']})"
+                        if a["joins_at_phase"] > st["phase"] else "")
+                print(f"  {a['name']} [{a['role']}]{soon} — joins when: "
+                      f"{a['join_trigger'] or 'needed'}")
         if q["stuck"]:
             print(f"\nSTUCK ({len(q['stuck'])}) — at-escalate sends one to the human early")
             for row in q["stuck"]:
@@ -1228,17 +1252,21 @@ def milestone_main():
 # -------------------------------------------------------------------- staff
 
 def staff_main():
-    parser = base_parser("Ask the human to bring another agent into the project")
+    parser = base_parser("Staffing: who joins the project, and who is not needed")
     sub = parser.add_subparsers(dest="action", required=True)
-    request = sub.add_parser("request", help="ask for an agent")
+    request = sub.add_parser("request", help="ask the human to bring an agent in")
     request.add_argument("--agent", required=True)
     request.add_argument("--by", required=True)
     request.add_argument("--on", required=True, help="the statement that triggered it: S-12")
     request.add_argument("--reason", required=True, help="what triggered it")
     request.add_argument("--cost", help="what it will cost in constraints, rounds, spend")
-    approve = sub.add_parser("approve", help="the human: bring them in")
+    passing = sub.add_parser("pass", help="record that an agent is not needed, and why")
+    passing.add_argument("--agent", required=True)
+    passing.add_argument("--by", required=True)
+    passing.add_argument("--reason", required=True, help="why this project does not need them")
+    approve = sub.add_parser("approve", help="the human: bring them in (with or without a request)")
     approve.add_argument("--agent", required=True)
-    approve.add_argument("--concern", required=True)
+    approve.add_argument("--concern", help="the staffing request, if there is one")
     approve.add_argument("--by", default="human")
     decline = sub.add_parser("decline", help="the human: do not")
     decline.add_argument("--agent", required=True)
@@ -1247,25 +1275,35 @@ def staff_main():
     decline.add_argument("--by", default="human")
     args = parser.parse_args()
 
+    def joinable(target, st):
+        """Can be staffed now: its phase has come, or comes next (so a phase never waits)."""
+        if target["active"]:
+            raise Refused(f"{target['name']} is already in the project")
+        if target["id"] == HUMAN_ID:
+            raise Refused("the human is always in the project")
+        if target["joins_at_phase"] > st["phase"] + 1:
+            raise Refused(f"{target['name']} joins at phase {target['joins_at_phase']}; "
+                          f"this project is in phase {st['phase']}")
+
+    def activate(conn, turn, target, requested_by, detail):
+        conn.execute("UPDATE agents SET active = 1, joined_round = ?, joined_turn_id = ?, "
+                     "requested_by = ? WHERE id = ?",
+                     (turn["round"], turn["id"], requested_by, target["id"]))
+        db.record_event(conn, turn, "agent", target["id"], None, "active", detail)
+
     def go():
         conn, me, turn = begin(args.db, args.by, "staff")
         target = db.agent(conn, args.agent)
         st = db.state(conn)
 
         if args.action == "request":
-            if target["active"]:
-                raise Refused(f"{target['name']} is already in the project")
-            if target["joins_at_phase"] > st["phase"]:
-                raise Refused(f"{target['name']} joins at phase {target['joins_at_phase']}; "
-                              f"this project is in phase {st['phase']}")
+            joinable(target, st)
             trigger = db.statement(conn, db.parse_ref(args.on, "S")[1])
-            if target["auto_staff"]:
-                conn.execute("UPDATE agents SET active = 1, joined_round = ?, joined_turn_id = ?, "
-                             "requested_by = ? WHERE id = ?",
-                             (turn["round"], turn["id"], me["id"], target["id"]))
-                db.record_event(conn, turn, "agent", target["id"], "inactive", "active", "auto_staff")
+            if target["auto_staff"] or db.policy(conn, "auto_approve_staffing", 0):
+                activate(conn, turn, target, me["id"],
+                         f"auto-approved on S-{trigger['id']}: {args.reason}")
                 finish(conn, turn)
-                print(f"{target['name']} joined (auto_staff)")
+                print(f"{target['name']} joined (auto-approved; the human sees it in the report)")
                 return 0
             deciders = db.who(conn, "staffing", "rules_on")
             if not deciders:
@@ -1279,26 +1317,38 @@ def staff_main():
                     f"  or instead:     defer or drop S-{trigger['id']}.")
             cid = raise_concern(conn, turn, me, deciders[0], kind["value"], body,
                                 statement_id=trigger["id"])
+            db.record_event(conn, turn, "agent", target["id"], None, "requested", f"C-{cid}")
             finish(conn, turn)
             print(f"C-{cid} staffing request for {target['name']} -> {deciders[0]['name']}")
             return 0
 
+        if args.action == "pass":
+            db.require_duty(conn, me, "recruiting", "owns", "decide an agent is not needed")
+            joinable(target, st)
+            db.record_event(conn, turn, "agent", target["id"], None, "passed", args.reason)
+            finish(conn, turn)
+            print(f"{target['name']}: not needed — {args.reason} (shown to the human in the report)")
+            return 0
+
         db.require_duty(conn, me, "staffing", "rules_on", "decide staffing")
-        row = db.concern(conn, db.parse_ref(args.concern, "C")[1])
-        if row["kind"] != "staffing" or row["status"] != "open":
-            raise Refused(f"C-{row['id']} is not an open staffing request")
+        row = None
+        if args.concern:
+            row = db.concern(conn, db.parse_ref(args.concern, "C")[1])
+            if row["kind"] != "staffing" or row["status"] != "open":
+                raise Refused(f"C-{row['id']} is not an open staffing request")
         if args.action == "approve":
-            if target["active"]:
-                raise Refused(f"{target['name']} is already in the project")
-            conn.execute("UPDATE agents SET active = 1, joined_round = ?, joined_turn_id = ?, "
-                         "requested_by = ? WHERE id = ?",
-                         (turn["round"], turn["id"], row["raised_by"], target["id"]))
-            db.record_event(conn, turn, "agent", target["id"], "inactive", "active",
-                            f"approved on C-{row['id']}")
+            joinable(target, st)
+            activate(conn, turn, target, row["raised_by"] if row else me["id"],
+                     f"approved on C-{row['id']}" if row else "staffed directly by the human")
             body = (f"Approved. {target['name']} joins in round {turn['round']} and reviews "
                     "every live statement.")
         else:
+            db.record_event(conn, turn, "agent", target["id"], None, "declined", args.reason)
             body = f"Declined. {args.reason}"
+        if row is None:
+            finish(conn, turn)
+            print(f"{target['name']} joined in round {turn['round']}")
+            return 0
         stamp = db.now()
         cur = conn.execute(
             """INSERT INTO answers (concern_id, answered_by, kind, body, verdict, round,
@@ -1365,6 +1415,20 @@ def build_report(conn, report_no, since_turn):
         for e in kept:
             c = db.concern(conn, e["object_id"])
             lines.append(f"- C-{c['id']} on {db.about(conn, c)}: {c['body'].strip()}")
+
+    staffing = since("agent", "e.to_status IN ('active', 'requested', 'declined', 'passed')")
+    if staffing:
+        lines += ["", f"## Staffing ({len(staffing)})"]
+        verbs = {"active": "joined", "requested": "requested", "declined": "declined",
+                 "passed": "not needed"}
+        for e in staffing:
+            a = db.agent_by_id(conn, e["object_id"])
+            lines.append(f"- {a['name']}: {verbs[e['to_status']]}"
+                         + (f" — {e['detail']}" if e["detail"] else ""))
+    left = db.unstaffed(conn)
+    if left:
+        lines += ["", "## Not yet on the project, and not decided",
+                  "- " + ", ".join(a["name"] for a in left)]
 
     waiting = conn.execute("SELECT * FROM concerns WHERE status = 'open' AND addressed_to = ?",
                            (HUMAN_ID,)).fetchall()
@@ -1504,6 +1568,12 @@ def round_main():
                 raise Refused(f"there is no phase {args.phase}")
             if st["phase"] == 1 and args.phase > 1 and st["status"] != "converged":
                 raise Refused("phase 1 has not converged: " + st["ends_when"].strip())
+            missing = db.missing_for_phase(conn, args.phase)
+            if missing:
+                raise Refused(f"phase {args.phase} needs someone on the project for: " + "; ".join(
+                    f"{duty} ({' or '.join(h['name'] for h in holders) or 'nobody in the roster'})"
+                    for duty, holders in missing)
+                    + " — staff them first (at-staff approve in the human's turn)")
             conn.execute("UPDATE project_state SET phase = ?, updated_at = ? WHERE id = 1",
                          (args.phase, db.now()))
             db.record_event(conn, None, "project", 1, None, None,
@@ -1542,9 +1612,33 @@ def policy_main():
     parser = base_parser("The rules in force: thresholds, kinds, verdicts, duties, turn order")
     parser.add_argument("--agent", help="one agent's motivation, phases and duties")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--set", metavar="KEY=VALUE",
+                        help="the human, in their turn: change a policy value for this project")
     args = parser.parse_args()
 
     def go():
+        if args.set:
+            key, _, value = args.set.partition("=")
+            conn, me, turn = begin(args.db, "human", "change policy")
+            old = conn.execute("SELECT value FROM policy WHERE key = ?", (key,)).fetchone()
+            if old is None:
+                # A project started before the plugin added this policy: take it from the defaults.
+                known = {p["key"]: p for p in cfg.load(cfg.DEFAULT_CONFIG)["policy"]}
+                if key not in known:
+                    keys = ", ".join(sorted(set(known) | {r["key"] for r in conn.execute(
+                        "SELECT key FROM policy")}))
+                    raise Refused(f"no policy '{key}'. Known: {keys}")
+                conn.execute("INSERT INTO policy (key, value, description) VALUES (?, ?, ?)",
+                             (key, str(known[key]["value"]), known[key]["description"].strip()))
+                old = {"value": str(known[key]["value"])}
+            conn.execute("UPDATE policy SET value = ? WHERE key = ?", (value, key))
+            db.record_event(conn, turn, "project", 1, None, None,
+                            f"policy {key}: {old['value']} -> {value}")
+            if cfg.PROJECT_CONFIG.exists():
+                cfg.set_policy(cfg.PROJECT_CONFIG, key, value)
+            finish(conn, turn)
+            print(f"{key}: {old['value']} -> {value}")
+            return 0
         conn = db.connect(args.db)
         settings = [dict(r) for r in conn.execute("SELECT * FROM policy ORDER BY key")]
         kinds = [dict(r) for r in db.vocab(conn, "statement_kinds")]

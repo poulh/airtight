@@ -73,6 +73,8 @@ their output; keep them when you relay it, and add them in your own words.
 After each answer, write it back exactly as they gave it:
 
 ```bash
+at-staff approve --agent architect                                   # they may staff anyone directly
+at-policy --set auto_approve_staffing=1                              # or change a policy
 at-answer --concern C-4 --from human --body "<their words>"          # goes back to the raiser
 at-answer --concern C-4 --from human --body "<their words>" --final  # only if they say it is final
 at-answer --concern C-4 --from human --reassign-to qa --body "<why>" # if they hand it on
@@ -99,6 +101,13 @@ When `at-state` says `converged` — every live statement agreed, no concern ope
 waiting for Peter — run `at-render requirements --out requirements.md`, show it to the user,
 say how many rounds it took, and ask them to confirm before `at-round --phase 2`. This is their
 last cheap chance to change direction.
+
+## Moving between phases
+
+`at-round --phase N` refuses when the phase needs someone who is not on the project (phase 2
+needs the architect; phase 3 the milestone duties and the developer; phase 4 QA and code
+review). Tell the user who is missing, and staff them in their turn if they agree — a new
+agent reviews every live statement, which is intended.
 
 ## Phase 2 — architecture
 

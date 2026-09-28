@@ -17,7 +17,8 @@ CREATE TABLE phases (
   number    INTEGER PRIMARY KEY,
   key       TEXT NOT NULL UNIQUE,   -- converge | architect | slice | build
   name      TEXT NOT NULL,
-  ends_when TEXT NOT NULL
+  ends_when TEXT NOT NULL,
+  needs     TEXT              -- comma-separated duties an active agent must hold to enter it
 );
 
 CREATE TABLE policy (

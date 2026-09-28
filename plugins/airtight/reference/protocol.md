@@ -24,8 +24,9 @@ once `.venv` is active; otherwise call them as `.venv/bin/at-queue`.
 
 The orchestrator opens your turn. You work inside it; every tool refuses to act outside it.
 
-1. **`at-queue --agent <your-role>`** — your last turn's summary, the statements in force, and
-   everything waiting on you.
+1. **`at-queue --agent <your-role>`** — your last turn's summary, who is on the project, the
+   statements in force, and everything waiting on you. Only address concerns to agents who
+   are on the project.
 2. **Judge the answers to your concerns.** `at-review --answer A-7 --by <role> --verdict
    accepted` when it is genuinely settled, or `--verdict replied --reply "..."` saying what is
    still missing. Accepting only closes the concern; Peter decides what, if anything, changes.

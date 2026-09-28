@@ -77,6 +77,20 @@ AGENT_FIELDS = AGENT_REQUIRED + (
 ) + DUTY_RELATIONS
 
 
+def set_policy(path, key, value):
+    """Change one policy value in a pipeline.yaml in place, keeping its comments."""
+    import re
+    text = Path(path).read_text()
+    pattern = re.compile(rf"(- key: {re.escape(key)}\n\s+value: )\S+")
+    if pattern.search(text):
+        Path(path).write_text(pattern.sub(lambda m: m.group(1) + str(value), text, count=1))
+        return
+    # an older copy without the key: add it at the top of the policy list
+    entry = (f"  - key: {key}\n    value: {value}\n    description: >\n"
+             f"      Added by airtight; see the plugin's default pipeline.yaml.\n")
+    Path(path).write_text(text.replace("policy:\n", "policy:\n" + entry, 1))
+
+
 def tools():
     """The at-* tools the plugin puts on PATH, from its bin/ directory."""
     return {p.name for p in (ROOT / "bin").iterdir() if p.name.startswith("at-")}
@@ -142,6 +156,11 @@ def validate(config):
         for field in ("number", "key", "name", "ends_when"):
             if not phase.get(field):
                 problems.append(f"{where}: '{field}' is required")
+        for field in phase:
+            if field not in ("number", "key", "name", "ends_when", "needs"):
+                problems.append(f"{where}: unknown field '{field}'")
+        if not isinstance(phase.get("needs") or [], list):
+            problems.append(f"{where}: 'needs' must be a list of duties")
         if phase.get("number") in numbers:
             problems.append(f"{where}: number {phase.get('number')} is used twice")
         numbers.append(phase.get("number"))
@@ -170,6 +189,12 @@ def validate(config):
 
     # ---- duties and duty relations
     duty_values = _entries(problems, config.get("duties"), "duties")
+    for phase in phases:
+        if isinstance(phase, dict) and isinstance(phase.get("needs"), list):
+            for duty in phase["needs"]:
+                if duty not in duty_values:
+                    problems.append(f"phases[{phase.get('number')}].needs: '{duty}' is not a "
+                                    "declared duty")
     relation_values = _entries(problems, config.get("duty_relations"), "duty_relations")
     for missing in sorted(set(DUTY_RELATIONS) - relation_values):
         problems.append(f"duty_relations: '{missing}' is missing")

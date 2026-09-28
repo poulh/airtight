@@ -19,17 +19,27 @@ failure to show it to the user.
 
    Then run `at-init --check` again.
 
-2. **Copy the default config into the project.** `at-init --scaffold` creates `.airtight/`,
-   copies the default `pipeline.yaml` into it (it never overwrites an existing one), and
-   validates it. That file is this project's own: the roster, the thresholds, the kinds of
-   statement, and every rule the tools enforce.
+2. **Ask how staffing should work.** Specialists (architect, QA, security, compliance, ops,
+   UI/UX, time-to-market) join when Peter (Project Manager) sees their trigger and requests
+   them. Ask the user which they want:
+   - **automatic** — each request is approved at once; the agent joins, and the next report
+     lists who joined and why, so they can still object;
+   - **manual** — each request comes to them for a yes or no, which pauses the loop.
 
-3. **Check for drift**: `at-doctor`.
+3. **Copy the default config into the project**, with their answer:
+   `at-init --scaffold --auto-staff yes` (automatic) or `--auto-staff no` (manual). It creates
+   `.airtight/`, copies the default `pipeline.yaml` into it (never overwriting an existing
+   one), sets `auto_approve_staffing`, and validates it. That file is this project's own: the
+   roster, the thresholds, the kinds of statement, and every rule the tools enforce.
 
-4. **Tell the user**, briefly:
+4. **Check for drift**: `at-doctor`.
+
+5. **Tell the user**, briefly:
    - `.airtight/pipeline.yaml` is theirs to tune before starting — for example which agents
      can be staffed, or `report_every_rounds`, the number of rounds between reports (each
      report pauses the loop, which is the spend brake). Run `at-init --check` after any edit.
+     Once the project has started, a policy is changed in their turn with
+     `at-policy --set auto_approve_staffing=1`, so the change is recorded.
    - `.airtight/` is meant to be committed: the database will record every statement, concern
      and decision, and it should travel with the code. `.airtight/log.jsonl` records every
      tool call, including refusals and errors — the first thing to look at if something goes

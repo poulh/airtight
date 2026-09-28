@@ -77,17 +77,23 @@ or raised; the tool refuses otherwise. When feedback shifts a goal, take it to t
    deliverable a `scope` statement.
 5. **Watch stuck threads.** When two agents are going round, send it to the human early with
    both positions, evenly: `at-escalate --concern C-9 --by pm --summary "..."`.
-6. **Staffing.** When a statement lands in a specialist's territory, ask the human:
+6. **Staffing.** Your queue shows who is on the project and, under *not yet on the project*,
+   every agent who could join, with their trigger. Each one needs a decision from you:
+   request them once their trigger has appeared, or, if this project will never need them,
+   record why — `at-staff pass --agent compliance --by pm --reason "no personal data is
+   stored"`. The reason goes into the human's report. Do not leave anyone undecided: an agent
+   who never joins never reviews anything, and "agreed" then means less than it says. To
+   request one:
    ```
    at-staff request --agent infosec --by pm --on S-6 \
      --reason "S-6 shows each employee's location to all staff" \
      --cost "a handful of visibility constraints; one more agent each round"
    ```
-   The human may prefer to drop the statement instead. That is a legitimate answer.
-   Triggers: personal data, login or permissions (infosec); regulated data — personal, time
-   off, pay, medical, EU staff (compliance); scale, refresh rates, uptime (sre); an interface
-   beyond a list or a form (ux). The architect and time-to-market join as soon as there is a
-   feature list.
+   Depending on the project's policy the request is approved at once or goes to the human,
+   who may prefer to drop the statement instead — a legitimate answer. Arty (Architect) and
+   Tina (Time-to-Market) join as soon as there is a feature list, Quinn (QA) once features are
+   concrete; the architect is needed before phase 2 can start, and Dana (Developer) before
+   phase 3.
 7. **Report** when `at-queue` says one is due: `at-report run --by pm`. The loop pauses until
    the human continues. You cannot end your turn with a report due.
 

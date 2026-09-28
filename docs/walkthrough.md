@@ -8,9 +8,9 @@
 
 ```
 $ at-init --brief 'An employee hub where staff request leave and managers approve it.'
-created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpjid5xn46/project.db
+created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmppw524x3p/project.db
   phases:       4
-  policy:       3 settings
+  policy:       4 settings
   vocabularies: 44 values across 12 tables
   agents:       11 seeded, 2 active: The Human, Peter (Project Manager)
   D-1 (v1) and S-1 (the brief), written in T-1
@@ -214,7 +214,27 @@ C-4 (Bring in Uma (UI/UX)? they argue…) staffing request for Uma (UI/UX) -> Th
 ```
 
 ```
-$ at-turn end --agent pm --summary 'Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma.'
+$ at-staff pass --agent ttm --by pm --reason 'one small release; nothing to cut'
+Tina (Time-to-Market): not needed — one small release; nothing to cut (shown to the human in the report)
+```
+
+```
+$ at-staff pass --agent infosec --by pm --reason 'no login yet; staff names only'
+Ian (Security): not needed — no login yet; staff names only (shown to the human in the report)
+```
+
+```
+$ at-staff pass --agent compliance --by pm --reason 'no leave balances or pay data in v1'
+Carla (Compliance): not needed — no leave balances or pay data in v1 (shown to the human in the report)
+```
+
+```
+$ at-staff pass --agent sre --by pm --reason 'a few dozen users; no uptime promise'
+Otto (Ops): not needed — a few dozen users; no uptime promise (shown to the human in the report)
+```
+
+```
+$ at-turn end --agent pm --summary 'Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma; passed on Tina, Ian, Carla and Otto with reasons.'
 T-4 (pm) done
 ```
 
@@ -274,7 +294,7 @@ T-4 (pm) done
 
 | | id | round | seq | agent | status | summary |
 |---|---|---|---|---|---|---|
-| 🆕 | 4 | 2 | 1 | pm | done | Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma. |
+| 🆕 | 4 | 2 | 1 | pm | done | Superseded the brief into a goal, a criterion, v1 scope and the approval rule; asked for Arty, Quinn and Uma; passed on Tina, Ian, Carla and Otto with reasons. |
 
 **project_state**
 
@@ -792,6 +812,8 @@ Peter (Project Manager) — round 4, phase 1 (Converge)
   you argue for: Does this still serve the goals? Interviews the human, is the only writer of statements, deliverables and milestones, and acts on settled concerns.
   your last turn (T-12): Answered Arty on escalation; kept the three staffing requests.
 
+ON THE PROJECT: The Human [human], Arty (Architect) [architect], Quinn (QA) [qa], Uma (UI/UX) [ux], Peter (Project Manager) [pm]
+
 IN FORCE (project-wide)
   goal S-2 (agreed): Staff always know where their leave request stands.
   success criterion S-5 (agreed): No request waits more than 5 working days for a decision.
@@ -1077,7 +1099,7 @@ round 5, phase 1 (Converge) — converged
 ```markdown
 # Requirements
 
-*Generated from the project database — round 5, change mark 84. Unmarked statements are agreed.*
+*Generated from the project database — round 5, change mark 91. Unmarked statements are agreed.*
 
 ## Goals
 

@@ -125,7 +125,7 @@ step("round 1 ends", ("at-turn next", "round 1 complete"), "at-round --advance")
 
 lines.append("## Round 2 — Peter turns the brief into statements, and asks for help\n")
 turn("pm", "Superseded the brief into a goal, a criterion, v1 scope and the approval rule; "
-     "asked for Arty, Quinn and Uma.",
+     "asked for Arty, Quinn and Uma; passed on Tina, Ian, Carla and Otto with reasons.",
      "at-review --answer A-1 --by pm --verdict accepted",
      """at-statement supersede --by pm --old S-1 --because C-1 \
 --new '{"kind":"goal","text":"Staff always know where their leave request stands."}' \
@@ -137,7 +137,11 @@ turn("pm", "Superseded the brief into a goal, a criterion, v1 scope and the appr
      "at-approve --agent pm --statement S-4", "at-approve --agent pm --statement S-5",
      "at-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'",
      "at-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'",
-     "at-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'")
+     "at-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'",
+     "at-staff pass --agent ttm --by pm --reason 'one small release; nothing to cut'",
+     "at-staff pass --agent infosec --by pm --reason 'no login yet; staff names only'",
+     "at-staff pass --agent compliance --by pm --reason 'no leave balances or pay data in v1'",
+     "at-staff pass --agent sre --by pm --reason 'a few dozen users; no uptime promise'")
 human("Approved Arty, Quinn and Uma.",
       "at-staff approve --agent architect --concern C-2",
       "at-staff approve --agent qa --concern C-3",
@@ -198,7 +202,7 @@ lines.append("## Round 5 — everyone approves the replacements, and phase 1 con
 for role in ("architect", "qa", "ux"):
     turn(role, "Approved S-6 and S-7.",
          f"at-approve --agent {role} --statement S-6", f"at-approve --agent {role} --statement S-7")
-step("nothing left for anyone", "at-turn next", "at-state")
+step("nothing left for anyone", ("at-turn next", "round 5 complete"), ("at-state", "converged"))
 
 render = subprocess.run("at-render requirements", shell=True, env=ENV, capture_output=True,
                         text=True, cwd=ROOT).stdout

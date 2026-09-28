@@ -461,6 +461,58 @@ def converged(conn):
     return bool(anything) and not pending and not open_any and not awaiting_peter(conn)
 
 
+# ------------------------------------------------------------------ staffing
+
+def roster(conn):
+    """Who is on the project now, in turn order."""
+    return conn.execute("SELECT * FROM agents WHERE active = 1 ORDER BY seq").fetchall()
+
+
+def staffing_decision(conn, agent_id):
+    """The latest staffing event for an agent: requested, declined, passed, active, or None."""
+    row = conn.execute(
+        """SELECT to_status, detail FROM events WHERE object = 'agent' AND object_id = ?
+             AND to_status IN ('requested', 'declined', 'passed', 'active')
+            ORDER BY id DESC LIMIT 1""", (agent_id,)).fetchone()
+    return row
+
+
+def unstaffed(conn):
+    """Agents who could join now (or next phase) and have no staffing decision yet."""
+    phase = state(conn)["phase"]
+    out = []
+    for a in conn.execute("SELECT * FROM agents WHERE active = 0 AND id <> ? "
+                          "AND joins_at_phase <= ? ORDER BY seq", (HUMAN_ID, phase + 1)):
+        decision = staffing_decision(conn, a["id"])
+        if decision and decision["to_status"] == "requested":
+            open_request = conn.execute(
+                "SELECT 1 FROM concerns WHERE id = ? AND status = 'open'",
+                (int(decision["detail"].split("-")[1]),)).fetchone() if decision["detail"] else None
+            if open_request:
+                continue
+        elif decision:
+            continue
+        out.append(a)
+    return out
+
+
+def missing_for_phase(conn, number):
+    """Duties the phase needs that no active agent holds, with who could hold them."""
+    try:
+        row = conn.execute("SELECT needs FROM phases WHERE number = ?", (number,)).fetchone()
+    except sqlite3.OperationalError:   # a database built before phases declared needs
+        return []
+    needs = [d.strip() for d in ((row and row["needs"]) or "").split(",") if d.strip()]
+    missing = []
+    for duty in needs:
+        holders = conn.execute(
+            """SELECT a.* FROM agent_duties d JOIN agents a ON a.id = d.agent_id
+                WHERE d.duty = ? ORDER BY a.seq""", (duty,)).fetchall()
+        if not any(h["active"] for h in holders):
+            missing.append((duty, holders))
+    return missing
+
+
 # -------------------------------------------------------------------- queues
 
 def context(conn):
@@ -524,6 +576,8 @@ def queue(conn, me):
                                    WHERE l.from_id = s.id AND l.relation = k.requires_link
                                      AND t.status IN ('pending', 'agreed'))
                 ORDER BY s.id""").fetchall()
+    q["roster"] = roster(conn)
+    q["unstaffed"] = unstaffed(conn) if has_duty(conn, me["id"], "recruiting", "owns") else []
     if has_duty(conn, me["id"], "escalation", "owns"):
         q["stuck"] = stuck(conn)
     if has_duty(conn, me["id"], "reporting", "owns"):
@@ -543,7 +597,8 @@ def queue(conn, me):
 
 def queue_is_empty(q):
     return not any(q[k] for k in ("verdicts", "to_answer", "to_review", "ready", "homeless",
-                                  "orphans", "stuck", "report_due", "milestones", "reports"))
+                                  "orphans", "stuck", "report_due", "milestones", "reports",
+                                  "unstaffed"))
 
 
 def milestone_duties(conn, me, phase):
