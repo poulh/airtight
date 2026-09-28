@@ -111,9 +111,7 @@ cross-checks the YAML, the charters, the skill and the database, and reports dri
 
 ## Open threads
 
-1. The spend cap, and what the Scribe reports when it trips (nothing measures money yet).
-2. Whether dormant agents wake automatically when their area is touched again.
-3. Where the database lives relative to the project repo, and whether it is committed.
+All settled in the redesign; see "Settled operating choices" in `convergence-pipeline.md`.
 
 Settled and now in `policy` (see `cp-policy`): stall threshold (`stall_replies`,
 `stall_rounds_open`) and the Scribe's check-in cadence (`report_every_rounds`).

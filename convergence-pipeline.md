@@ -14,8 +14,8 @@ The shared state is a SQLite database. Every requirement, approval, concern and 
 row, stamped with the round it happened in.
 
 > **Status (2026-09-27):** this document is the redesigned model, agreed in an interview with
-> the human. The code in `convergence/`, `schema.sql` and `pipeline.yaml` still implements the
-> previous model and has not been rebuilt yet.
+> the human; every design question is settled. The code in `convergence/`, `schema.sql` and
+> `pipeline.yaml` still implements the previous model and has not been rebuilt yet.
 
 ---
 
@@ -477,11 +477,22 @@ planned ──► building ──► in_review ──► merged ──► accept
 
 ---
 
+## Settled operating choices
+
+- **Spend.** The report is the brake: the loop never runs more than `report_every_rounds`
+  rounds without the human saying continue, and each report shows the agent turns taken since
+  the last one (and tokens, where Claude Code exposes them). There is no separate money cap.
+- **Dormant agents** are not a concept. Every approver reviews every statement it has not
+  approved; an agent whose queue is empty is skipped that round at no cost.
+- **The database** lives at `.convergence/project.db` in the project's own repo and is
+  committed at each report, so the spec, its history and the code travel together.
+- **Code** is built on one branch per milestone in the project's repo (`m-3-approve-decline`);
+  Dana merges it to main when no concern on the milestone is open, and the human tests main.
+- **Quinn writes automated acceptance tests** from the milestone's statements and success
+  criteria, committed with the code and re-run at every later milestone, so regressions show
+  at once. Dana does not write Quinn's tests.
+
 ## Open
 
-- **Phase 4 code home:** one branch per milestone in the project's own repo — confirm, and
-  whether Quinn writes automated acceptance tests or tests by hand.
-- **Prose pass:** sections above still say "requirement" loosely; tighten to "statement"
-  during the rebuild.
-- **Spend cap**, **dormant agents** waking when their area is touched, and **where the
-  database lives** and whether it is committed — unchanged from before.
+- **Prose pass:** sections above still say "requirement" loosely where "statement" is meant;
+  tighten during the rebuild.
