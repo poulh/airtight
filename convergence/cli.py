@@ -1705,14 +1705,136 @@ def doctor_main():
 
 # ------------------------------------------------------------------- render
 
+def answer_that_closed(conn, concern_id):
+    return conn.execute(
+        """SELECT w.body, g.name FROM answers w JOIN agents g ON g.id = w.answered_by
+            JOIN verdicts v ON v.value = w.verdict
+            WHERE w.concern_id = ? AND v.closes = 1 ORDER BY w.id DESC LIMIT 1""",
+        (concern_id,)).fetchone()
+
+
+def render_milestone(conn, mid):
+    """milestone-N.md: everything the developer builds from and QA tests against."""
+    st = db.state(conn)
+    m = db.milestone(conn, mid)
+    d = db.deliverable(conn, m["deliverable_id"])
+    inside = conn.execute("SELECT * FROM statements WHERE milestone_id = ? AND status IN "
+                          "('pending', 'agreed') ORDER BY id", (m["id"],)).fetchall()
+    in_force = db.context(conn)
+    lines = [f"# Milestone M-{m['id']}: {m['name']}", "",
+             f"*Generated from the project database — round {st['round']}, change mark "
+             f"{st['change_mark']}. Regenerate it rather than editing it.*", "",
+             f"- **Deliverable:** {d['name']} (D-{d['id']})",
+             f"- **Status:** {m['status']}" + (f", branch `{m['branch']}`" if m["branch"] else ""),
+             ""]
+    if m["intent"]:
+        lines += [m["intent"].strip(), ""]
+    blocked = [s for s in inside if s["status"] != "agreed"]
+    if blocked:
+        lines += ["> **Blocked.** " + ", ".join(f"S-{s['id']}" for s in blocked)
+                  + " is not agreed. Build nothing that depends on it until it is.", ""]
+
+    lines += ["## What to build", "",
+              "Each statement is one behaviour to implement and one acceptance check to pass.", ""]
+    for s in inside:
+        flag = "" if s["status"] == "agreed" else f" *({s['status']} — do not build yet)*"
+        lines.append(f"### S-{s['id']} ({s['kind']}){flag}")
+        lines += ["", s["text"].strip(), ""]
+        if s["rationale"]:
+            lines += [f"*Why:* {s['rationale'].strip()}", ""]
+        # Its own reasons, then those of every statement it replaced, oldest last.
+        chain, frontier = [s["id"]], [s["id"]]
+        while frontier:
+            frontier = [r["to_id"] for sid in frontier for r in conn.execute(
+                "SELECT to_id FROM links WHERE from_id = ? AND relation = 'supersedes'", (sid,))]
+            chain += [f for f in frontier if f not in chain]
+        seen = set()
+        for sid in chain:
+            for c in conn.execute(
+                    """SELECT c.* FROM statement_reasons r JOIN concerns c ON c.id = r.concern_id
+                        WHERE r.statement_id = ? ORDER BY c.id""", (sid,)):
+                if c["id"] in seen:
+                    continue
+                seen.add(c["id"])
+                via = "" if sid == s["id"] else f" (when S-{sid} was written)"
+                closed = answer_that_closed(conn, c["id"])
+                lines.append(f"- From C-{c['id']} ({c['kind']}){via}: {c['body'].strip()}")
+                if closed:
+                    lines.append(f"  - {closed['name']}: {closed['body'].strip()}")
+        if seen:
+            lines.append("")
+    if not inside:
+        lines += ["*No statements assigned yet.*", ""]
+
+    scope = db.scope_of(conn, d["id"])
+    lines += ["## Context", ""]
+    for s in scope:
+        lines.append(f"- **Scope of {d['name']}** (S-{s['id']}): {s['text'].strip()}")
+    for kind, label in (("goal", "Goal"), ("non_goal", "Not a goal"),
+                        ("success_criterion", "Success criterion")):
+        for s in in_force:
+            if s["kind"] == kind:
+                lines.append(f"- **{label}** (S-{s['id']}): {s['text'].strip()}")
+    lines.append("")
+
+    invariants = [s for s in in_force if s["kind"] == "invariant"]
+    lines += ["## Invariants to honour", "",
+              "Rules the code must keep true everywhere. Breaking one to make this milestone "
+              "simpler is never acceptable; raise a concern instead.", ""]
+    lines += [f"- **S-{s['id']}** {s['text'].strip()}" for s in invariants] or ["*None yet.*"]
+    lines.append("")
+
+    others = conn.execute(
+        """SELECT * FROM statements WHERE deliverable_id = ? AND status IN ('pending', 'agreed')
+             AND kind <> 'scope' AND (milestone_id IS NULL OR milestone_id <> ?) ORDER BY id""",
+        (d["id"], m["id"])).fetchall()
+    lines += ["## Not in this milestone", "",
+              "Belongs to the same deliverable but is built elsewhere. If this milestone needs "
+              "any of it, that is a concern, not a licence.", ""]
+    for s in others:
+        where = f"M-{s['milestone_id']}" if s["milestone_id"] else "not yet in a milestone"
+        lines.append(f"- **S-{s['id']}** ({where}) {s['text'].strip()}")
+    if not others:
+        lines.append("*Nothing.*")
+    lines.append("")
+
+    findings = conn.execute("SELECT * FROM concerns WHERE milestone_id = ? AND status = 'open' "
+                            "ORDER BY id", (m["id"],)).fetchall()
+    if findings:
+        lines += ["## Open concerns on this milestone", ""]
+        for c in findings:
+            raiser = db.agent_by_id(conn, c["raised_by"])
+            lines.append(f"- **C-{c['id']}** ({c['kind']}, from {raiser['role']}) "
+                         f"{c['body'].strip()}")
+        lines.append("")
+
+    lines += ["## Done when", "",
+              f"- every statement above passes an automated acceptance test written by QA",
+              f"- the invariants above still hold",
+              f"- QA and code review have passed it and no concern on it is open",
+              f"- the human has tried it and accepted it", ""]
+    return "\n".join(lines)
+
+
 def render_main():
     parser = base_parser("Generate a document from the tables")
-    parser.add_argument("document", choices=["requirements"])
+    parser.add_argument("document", choices=["requirements", "milestone"])
+    parser.add_argument("--milestone", help="M-3, for the milestone document")
     parser.add_argument("--out", help="write to this file instead of stdout")
     args = parser.parse_args()
 
     def go():
         conn = db.connect(args.db)
+        if args.document == "milestone":
+            if not args.milestone:
+                raise Refused("which milestone: --milestone M-3")
+            text = render_milestone(conn, db.parse_ref(args.milestone, "M")[1])
+            if args.out:
+                Path(args.out).write_text(text)
+                print(f"wrote {args.out}")
+            else:
+                print(text, end="")
+            return 0
         st = db.state(conn)
         live = ("pending", "agreed")
         mark = lambda s: "" if s["status"] == "agreed" else f" *({s['status']})*"

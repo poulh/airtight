@@ -18,7 +18,8 @@ built in a way that costs the next three milestones dearly.
 
 ## What you review
 
-1. **Does it honor the invariants?** They are project-wide statements; `cp-queue` shows them. A change that quietly
+1. **Does it honor the invariants?** The milestone's file lists them (`cp-render milestone
+   --milestone M-3`). A change that quietly
    breaks one is the most expensive thing you can miss, because the cost lands on someone
    else, later.
 2. **Correctness the tests do not reach.** Concurrency, error paths, resource cleanup,

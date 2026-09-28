@@ -125,7 +125,9 @@ deliverable is in a checked milestone, show the user the list and, on their say-
 ## Phase 4 — build
 
 **The user picks each milestone. Never build the whole list unattended.** In their turn,
-`cp-milestone start`; the loop then runs Dana, Quinn and Rita through it until Dana merges,
+`cp-milestone start`, then write its file into the project repo with
+`cp-render milestone --milestone M-3 --out milestone-3.md` (regenerate it whenever a statement
+in it changes). The loop then runs Dana, Quinn and Rita through it until Dana merges,
 and pauses for the user to try it and accept it — or raise a concern on it, which sends it
 back. Then ask which milestone is next.
 

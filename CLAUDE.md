@@ -16,10 +16,8 @@ statement's life through the real tools, table by table.
   the goal guard, retraction, stall auto-escalation, early escalation, the human's final
   answer, deliverable splits and homeless statements, report pauses, and a milestone blocked
   by a statement change mid-build.
-- **Not yet built:** `cp-render milestone` and the `milestone-N.md` template (phase 4 has the
-  statements in the database but no generated file to build from), and a dry run with real
-  agents on a real project. No agent has taken a turn yet; every test so far drives the tools
-  directly.
+- **Not yet done:** a dry run with real agents on a real project. No agent has taken a turn
+  yet; every test so far drives the tools directly.
 - `./setup.sh` creates `.venv` and installs the package editable; re-running it is safe. Tools
   take `--db` or `$CP_DB` (default `.convergence/project.db`).
 - `~/git/convergence-pipeline` is a symlink to this directory, not a second copy.
@@ -88,11 +86,10 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 | `cp-report` | Peter / human | `run` pauses the loop; `continue` resumes it |
 | `cp-state` | anyone | Round, phase, status, what it is paused on, who is left this round |
 | `cp-round` | skill | `--advance` (refuses mid-turn, paused, incomplete round, report due); `--phase N` (1→2 only once converged) |
-| `cp-render` | anyone | `requirements.md`: goals with their criteria, per-deliverable statements, kept as is, history |
+| `cp-render` | anyone | `requirements`: goals with their criteria, per-deliverable statements, kept as is, history. `milestone --milestone M-3`: what to build, each statement's full trail of concerns back through what it replaced, context, invariants, what is not in it, open findings, done-when |
 | `cp-policy` / `cp-doctor` | anyone | The rules in force; drift between config, docs and database |
 
 ## Next steps
 
-1. `cp-render milestone` and the `milestone-N.md` template.
-2. A dry run of phase 1 with real agent turns on a real, low-stakes project.
-3. Consider moving the scratch edge-case drivers into the repo as a test suite.
+1. A dry run of phase 1 with real agent turns on a real, low-stakes project.
+2. Consider moving the scratch edge-case drivers into the repo as a test suite.

@@ -39,8 +39,10 @@ milestone?
 The human starts a milestone; it gets its own branch. Build **only** that milestone. If work
 would be easier with something from a later milestone, that is a concern, not a licence.
 
-1. Read its statements in full, their rationales, and the invariants. Knowing *why* a
-   statement exists prevents the technically-correct implementation that misses the point.
+1. Read its file: `cp-render milestone --milestone M-3`. It holds the statements, the
+   concerns and answers that shaped each one, the goals and scope, the invariants, and what
+   is deliberately not in this milestone. Knowing *why* a statement exists prevents the
+   technically-correct implementation that misses the point.
 2. **If a statement is ambiguous or wrong, stop.** Raise a concern on the statement, addressed
    to Peter. The milestone is blocked until the statement is settled and agreed again;
    nothing is built on a guess.

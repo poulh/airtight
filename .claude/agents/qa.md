@@ -57,8 +57,8 @@ fighting for. Say which it is in the concern itself — it makes you credible wh
 
 ## Phase 4: testing a milestone
 
-When a milestone is in review, you write **automated acceptance tests** from its statements
-and the success criteria it serves, and commit them on the milestone's branch. They run again
+When a milestone is in review, you write **automated acceptance tests** from its file
+(`cp-render milestone --milestone M-3`) — its statements and the success criteria it serves — and commit them on the milestone's branch. They run again
 at every later milestone, so a regression shows up at once. You test behavior, not code:
 
 - every statement in the milestone, including the corner cases you put there
