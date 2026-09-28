@@ -1,10 +1,14 @@
-"""The turn tools.
+"""The pipeline tools.
 
 Agents never write SQL, and no rule is written here. Every check below reads
-its rule from the database, which cp-init seeded from pipeline.yaml: which role
-may rule on a kind of requirement, what an answer must carry, who owns a duty,
-when a thread has stalled. Changing a rule means editing the YAML and
-re-seeding, never editing Python.
+its rule from the database, which cp-init seeded from pipeline.yaml: which
+kinds only the human can change, what a verdict does, who owns a duty, when a
+thread has stalled. Changing a rule means editing the YAML and re-seeding,
+never editing Python.
+
+Every writing tool acts inside the caller's running turn, stamps what it writes
+with that turn, and calls db.refresh() before committing so derived state
+(agreed, blocked, paused, converged) is never stale.
 """
 
 import argparse
@@ -32,22 +36,46 @@ def run(fn):
         return db.fail(exc)
 
 
-def ids(text):
-    if not text:
-        return []
-    return [int(part.strip().lstrip("Rr-")) for part in text.split(",") if part.strip()]
+def begin(path, role, what):
+    """Open the database for an agent acting inside its own running turn."""
+    conn = db.connect(path)
+    me = db.require_active(conn, db.agent(conn, role), what)
+    return conn, me, db.require_turn(conn, me)
 
 
-def role_of(conn, agent_id):
-    return conn.execute("SELECT role FROM agents WHERE id = ?", (agent_id,)).fetchone()["role"]
+def finish(conn, turn):
+    db.refresh(conn, turn)
+    conn.commit()
+
+
+def show(row):
+    """One statement on one line: S-12 [functional, D-1, pending] text."""
+    where = f", D-{row['deliverable_id']}" if row["deliverable_id"] else ""
+    return f"S-{row['id']} [{row['kind']}{where}, {row['status']}] {row['text'].strip()}"
+
+
+def raise_concern(conn, turn, me, them, kind, body, statement_id=None, milestone_id=None):
+    cur = conn.execute(
+        """INSERT INTO concerns (statement_id, milestone_id, kind, raised_by, addressed_to, body,
+                                 round, turn_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (statement_id, milestone_id, kind, me["id"], them["id"], body, turn["round"],
+         turn["id"], db.now()),
+    )
+    on = f"S-{statement_id}" if statement_id else f"M-{milestone_id}"
+    db.record_event(conn, turn, "concern", cur.lastrowid, None, "open",
+                    f"{kind} on {on}, to {them['role']}")
+    return cur.lastrowid
 
 
 # --------------------------------------------------------------------- init
 
 def init_main():
-    parser = base_parser("Build a project database from schema.sql and pipeline.yaml")
+    parser = base_parser("Build a project database and record the human's brief as S-1")
     parser.add_argument("--config", default=str(cfg.DEFAULT_CONFIG))
     parser.add_argument("--schema", default=str(cfg.DEFAULT_SCHEMA))
+    parser.add_argument("--brief", help="the human's idea, verbatim")
+    parser.add_argument("--deliverable", default="v1", help="name of the first deliverable")
     parser.add_argument("--force", action="store_true", help="replace an existing database")
     parser.add_argument("--check", action="store_true", help="validate the config and stop")
     args = parser.parse_args()
@@ -62,6 +90,9 @@ def init_main():
     if args.check:
         print(f"{args.config}: valid")
         return 0
+    if not args.brief:
+        print("cp-init needs the human's idea in their own words: --brief '...'", file=sys.stderr)
+        return 1
 
     path = Path(args.db)
     if path.exists():
@@ -69,6 +100,7 @@ def init_main():
             print(f"{path} already exists (use --force to replace it)", file=sys.stderr)
             return 1
         path.unlink()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = db.connect(str(path), must_exist=False)
     conn.executescript(Path(args.schema).read_text())
@@ -89,7 +121,6 @@ def init_main():
             [(e["value"], e["description"].strip(), seq)
              for seq, e in enumerate(configuration[name], start=1)],
         )
-
     total_values = 0
     for name, attrs in cfg.VOCABULARIES.items():
         columns = ["value", "description", *attrs, "seq"]
@@ -104,18 +135,20 @@ def init_main():
                     values.append(raw.strip() if isinstance(raw, str) else raw)
             values.append(seq)
             rows.append(tuple(values))
-        placeholders = ", ".join("?" * len(columns))
         conn.executemany(
-            f"INSERT INTO {name} ({', '.join(columns)}) VALUES ({placeholders})", rows)
+            f"INSERT INTO {name} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+            rows)
         total_values += len(rows)
 
     for agent in configuration["agents"]:
         conn.execute(
-            """INSERT INTO agents (id, name, role, motivation, charter, joins_at_phase,
-                                   join_trigger, join_rationale, auto_staff, active, joined_round)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO agents (id, name, role, motivation, charter, seq, approves,
+                                   joins_at_phase, join_trigger, join_rationale, auto_staff,
+                                   active, joined_round)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (agent["id"], agent["name"], agent["role"], agent["motivation"].strip(),
-             agent.get("charter"), agent["joins_at_phase"],
+             agent.get("charter"), agent["seq"], 1 if agent.get("approves") else 0,
+             agent["joins_at_phase"],
              (agent.get("join_trigger") or "").strip() or None,
              (agent.get("join_rationale") or "").strip() or None,
              1 if agent.get("auto_staff") else 0,
@@ -132,10 +165,29 @@ def init_main():
                 [(agent["id"], duty, relation) for duty in agent.get(relation) or []],
             )
 
-    conn.execute(
-        "INSERT INTO project_state (id, round, phase, change_mark, updated_at) VALUES (1,1,1,0,?)",
-        (db.now(),),
-    )
+    stamp = db.now()
+    conn.execute("INSERT INTO project_state (id, updated_at) VALUES (1, ?)", (stamp,))
+    # The brief is the human's first turn.
+    cur = conn.execute(
+        """INSERT INTO turns (round, seq, phase, agent_id, status, started_at)
+           VALUES (1, 1, 1, ?, 'running', ?)""", (HUMAN_ID, stamp))
+    turn = conn.execute("SELECT * FROM turns WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.execute("UPDATE project_state SET current_turn_id = ? WHERE id = 1", (turn["id"],))
+    conn.execute("UPDATE agents SET joined_turn_id = ? WHERE active = 1", (turn["id"],))
+
+    cur = conn.execute(
+        """INSERT INTO deliverables (name, seq, created_round, turn_id, created_at)
+           VALUES (?, 1, 1, ?, ?)""", (args.deliverable, turn["id"], stamp))
+    db.record_event(conn, turn, "deliverable", cur.lastrowid, None, "live",
+                    "the first assumption: the whole idea ships at once")
+    cur = conn.execute(
+        """INSERT INTO statements (kind, text, created_round, turn_id, created_at)
+           VALUES ('brief', ?, 1, ?, ?)""", (args.brief.strip(), turn["id"], stamp))
+    db.record_event(conn, turn, "statement", cur.lastrowid, None, "pending", "the human's brief")
+    db.refresh(conn, turn)
+    conn.execute("UPDATE turns SET status = 'done', summary = 'Gave the brief.', ended_at = ? "
+                 "WHERE id = ?", (db.now(), turn["id"]))
+    conn.execute("UPDATE project_state SET current_turn_id = NULL WHERE id = 1")
     conn.commit()
 
     active = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE active=1 ORDER BY id")]
@@ -143,11 +195,116 @@ def init_main():
     print(f"  phases:       {len(configuration['phases'])}")
     print(f"  policy:       {len(configuration['policy'])} settings")
     print(f"  vocabularies: {total_values} values across {len(cfg.VOCABULARIES)} tables")
-    print(f"  agents:       {len(configuration['agents'])} seeded, {len(active)} active")
-    for name in active:
-        print(f"                - {name}")
+    print(f"  agents:       {len(configuration['agents'])} seeded, {len(active)} active: "
+          + ", ".join(active))
+    print(f"  D-1 '{args.deliverable}' and S-1 (the brief), written in T-{turn['id']}")
     print("  state:        round 1, phase 1")
     return 0
+
+
+# -------------------------------------------------------------------- turns
+
+def turn_main():
+    parser = base_parser("Open and close turns. Every action happens inside one")
+    parser.add_argument("--json", action="store_true")
+    sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("next", help="open the next agent's turn this round, skipping empty queues")
+    start = sub.add_parser("start", help="open the human's turn")
+    start.add_argument("--agent", required=True)
+    end = sub.add_parser("end", help="close your turn")
+    end.add_argument("--agent", required=True)
+    end.add_argument("--summary", help="one or two sentences: what you did and why")
+    end.add_argument("--tokens", type=int)
+    for p in (sub.choices["next"], start, end):
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    def emit(payload, text):
+        print(json.dumps(payload, indent=2) if args.json else text)
+
+    def open_turn(conn, agent_row, status):
+        st = db.state(conn)
+        seq = conn.execute("SELECT COUNT(*) AS n FROM turns WHERE round = ?",
+                           (st["round"],)).fetchone()["n"] + 1
+        stamp = db.now()
+        cur = conn.execute(
+            """INSERT INTO turns (round, seq, phase, agent_id, status, started_at, ended_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (st["round"], seq, st["phase"], agent_row["id"], status, stamp,
+             stamp if status == "skipped" else None))
+        if status == "running":
+            conn.execute("UPDATE project_state SET current_turn_id = ?, updated_at = ? WHERE id = 1",
+                         (cur.lastrowid, stamp))
+        return cur.lastrowid
+
+    def go():
+        conn = db.connect(args.db)
+        running = db.running_turn(conn)
+
+        if args.action == "end":
+            me = db.agent(conn, args.agent)
+            turn = db.require_turn(conn, me)
+            if db.has_duty(conn, me["id"], "reporting", "owns") and db.report_due(conn):
+                raise Refused("a report is due this round — cp-report run before ending your turn")
+            did = conn.execute("SELECT 1 FROM events WHERE turn_id = ?", (turn["id"],)).fetchone()
+            if did and not args.summary:
+                raise Refused("say what you did and why, in a sentence or two: --summary '...'")
+            db.refresh(conn, turn)
+            st = db.state(conn)
+            conn.execute("UPDATE turns SET status = 'done', summary = ?, tokens = ?, ended_at = ? "
+                         "WHERE id = ?", (args.summary, args.tokens, db.now(), turn["id"]))
+            conn.execute("UPDATE agents SET last_seen_change = ? WHERE id = ?",
+                         (st["change_mark"], me["id"]))
+            conn.execute("UPDATE project_state SET current_turn_id = NULL WHERE id = 1")
+            conn.commit()
+            emit({"turn": turn["id"], "agent": me["role"], "status": "done"},
+                 f"T-{turn['id']} ({me['role']}) done")
+            return 0
+
+        if running:
+            holder = db.agent_by_id(conn, running["agent_id"])
+            raise Refused(f"T-{running['id']} ({holder['role']}) is still running — "
+                          f"cp-turn end --agent {holder['role']} first")
+
+        if args.action == "start":
+            me = db.require_active(conn, db.agent(conn, args.agent), "take a turn")
+            if me["id"] != HUMAN_ID:
+                raise Refused("agents take turns in order through cp-turn next; "
+                              "start is for the human's turn")
+            turn_id = open_turn(conn, me, "running")
+            conn.commit()
+            emit({"turn": turn_id, "agent": "human"}, f"T-{turn_id} human")
+            return 0
+
+        st = db.state(conn)
+        if st["status"] == "paused":
+            what = "P" if st["paused_reason"] == "report" else "C"
+            raise Refused(f"paused on {what}-{st['paused_ref']}: it is the human's turn — "
+                          "cp-turn start --agent human")
+        taken = {r["agent_id"] for r in conn.execute(
+            "SELECT agent_id FROM turns WHERE round = ?", (st["round"],))}
+        skipped = []
+        for candidate in db.rotation(conn):
+            if candidate["id"] in taken:
+                continue
+            if db.queue_is_empty(db.queue(conn, candidate)):
+                open_turn(conn, candidate, "skipped")
+                skipped.append(candidate["role"])
+                continue
+            turn_id = open_turn(conn, candidate, "running")
+            conn.commit()
+            emit({"turn": turn_id, "agent": candidate["role"], "round": st["round"],
+                  "skipped": skipped},
+                 (f"skipped (empty queue): {', '.join(skipped)}\n" if skipped else "")
+                 + f"T-{turn_id} {candidate['role']} (round {st['round']})")
+            return 0
+        conn.commit()
+        emit({"turn": None, "round": st["round"], "round_complete": True, "skipped": skipped},
+             (f"skipped (empty queue): {', '.join(skipped)}\n" if skipped else "")
+             + f"round {st['round']} complete — cp-round --advance")
+        return 0
+
+    return run(go)
 
 
 # -------------------------------------------------------------------- queue
@@ -156,64 +313,194 @@ def queue_main():
     parser = base_parser("What this agent has to deal with on its turn")
     parser.add_argument("--agent", required=True, help="role, e.g. pm")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--mark-seen", action="store_true", help="record that changes were read")
     args = parser.parse_args()
+
+    def thread(conn, concern_id):
+        return conn.execute(
+            """SELECT w.*, g.role AS by_role FROM answers w JOIN agents g ON g.id = w.answered_by
+                WHERE w.concern_id = ? ORDER BY w.id""", (concern_id,)).fetchall()
 
     def go():
         conn = db.connect(args.db)
         me = db.require_active(conn, db.agent(conn, args.agent), "take a turn")
         st = db.state(conn)
-        mail = db.outstanding(conn, me)
-        reviews = db.to_review(conn, me)
-        changes = db.changes_since(conn, me["last_seen_change"])
-        duties = db.duties_of(conn, me["id"])
+        q = db.queue(conn, me)
+        in_force = db.context(conn)
 
         if args.json:
             print(json.dumps({
                 "round": st["round"], "phase": st["phase"], "phase_name": st["phase_name"],
-                "agent": {"id": me["id"], "name": me["name"], "role": me["role"],
-                          "motivation": me["motivation"],
-                          "phases": db.phases_of(conn, me["id"]),
-                          "duties": [{"duty": d["duty"], "relation": d["relation"]} for d in duties]},
-                "concerns_to_answer": [dict(r) for r in mail],
-                "answers_to_review": [dict(r, names=[dict(n) for n in db.named_by(conn, r["id"])])
-                                      for r in reviews],
-                "requirement_changes": [dict(r) for r in changes],
-                "concern_kinds": {r["value"]: r["description"] for r in db.vocab(conn, "concern_kinds")},
-                "answer_kinds": {r["value"]: r["description"] for r in db.vocab(conn, "answer_kinds")},
-                "requirement_kinds": {r["value"]: r["description"]
-                                      for r in db.vocab(conn, "requirement_kinds")},
+                "agent": {"role": me["role"], "name": me["name"], "motivation": me["motivation"],
+                          "approves": bool(me["approves"]),
+                          "duties": [dict(d) for d in db.duties_of(conn, me["id"])]},
+                "last_summary": q["last_summary"]["summary"] if q["last_summary"] else None,
+                "in_force": [dict(r) for r in in_force],
+                "answers_to_judge": [dict(r) for r in q["verdicts"]],
+                "concerns_to_answer": [dict(r, thread=[dict(t) for t in thread(conn, r["id"])])
+                                       for r in q["to_answer"]],
+                "statements_to_review": [
+                    dict(r, scope=[dict(s) for s in db.scope_of(conn, r["deliverable_id"])]
+                         if r["deliverable_id"] else [])
+                    for r in q["to_review"]],
+                "ready_to_act_on": [
+                    dict(r, concerns=[dict(c, thread=[dict(t) for t in thread(conn, c["id"])])
+                                      for c in db.awaiting_peter(conn, r["id"])])
+                    for r in q["ready"]],
+                "homeless": [dict(r) for r in q["homeless"]],
+                "orphaned": [dict(r) for r in q["orphans"]],
+                "stuck": [dict(r) for r in q["stuck"]],
+                "report_due": q["report_due"],
+                "milestones": q["milestones"],
+                "reports_to_continue": [dict(r) for r in q["reports"]],
             }, indent=2))
-        else:
-            print(f"{me['name']} — round {st['round']}, phase {st['phase']} ({st['phase_name']})")
-            print(f"  you argue for: {me['motivation'].strip()}")
-            if duties:
-                print("  your duties:   " + ", ".join(f"{d['relation']} {d['duty']}" for d in duties))
-            print(f"\nCONCERNS ADDRESSED TO YOU ({len(mail)})")
-            for row in mail:
-                about = (f", about R-{row['about_requirement_id']}" if row["about_requirement_id"]
-                         else f", about C-{row['about_concern_id']}" if row["about_concern_id"]
-                         else "")
-                print(f"  C-{row['id']} [{row['kind']}] from {row['raiser_name']} "
-                      f"(round {row['round']}{about})")
-                print(f"       {row['body'].strip()}")
-            print(f"\nANSWERS AWAITING YOUR REVIEW ({len(reviews)})")
-            for row in reviews:
-                print(f"  A-{row['id']} on C-{row['concern_id']} from {row['answerer']} [{row['kind']}]")
-                print(f"       {row['body'].strip()}")
-                for named in db.named_by(conn, row["id"]):
-                    print(f"       names R-{named['id']} [{named['kind']}, {named['status']}]: "
-                          f"{named['statement'].strip()}")
-            print(f"\nREQUIREMENT CHANGES SINCE YOU LAST LOOKED ({len(changes)})")
-            for row in changes:
-                arrow = f"{row['from_status'] or 'new'} -> {row['to_status']}"
-                print(f"  R-{row['requirement_id']} [{row['kind']}] {arrow} by {row['actor_name']}")
-                print(f"       {row['statement'].strip()}")
+            return 0
 
-        if args.mark_seen:
-            conn.execute("UPDATE agents SET last_seen_change = ? WHERE id = ?",
-                         (db.state(conn)["change_mark"], me["id"]))
-            conn.commit()
+        print(f"{me['name']} — round {st['round']}, phase {st['phase']} ({st['phase_name']})")
+        print(f"  you argue for: {me['motivation'].strip()}")
+        if q["last_summary"]:
+            print(f"  your last turn (T-{q['last_summary']['id']}): "
+                  f"{q['last_summary']['summary'].strip()}")
+
+        print("\nIN FORCE (project-wide)")
+        for row in in_force:
+            print(f"  {show(row)}")
+
+        print(f"\nANSWERS TO JUDGE ({len(q['verdicts'])}) — cp-review")
+        for row in q["verdicts"]:
+            on = f"S-{row['statement_id']}" if row["statement_id"] else f"M-{row['milestone_id']}"
+            print(f"  A-{row['id']} on C-{row['concern_id']} ({on}) from {row['answerer']}")
+            print(f"       you asked: {row['concern_body'].strip()}")
+            print(f"       answer:    {row['body'].strip()}")
+
+        print(f"\nCONCERNS TO ANSWER ({len(q['to_answer'])}) — cp-answer")
+        for row in q["to_answer"]:
+            print(f"  C-{row['id']} [{row['kind']}] on {db.about(row)} from {row['raiser_name']}")
+            print("       " + row["body"].strip().replace("\n", "\n       "))
+            for t in thread(conn, row["id"]):
+                if t["kind"] == "reassign":
+                    print(f"       ↳ {t['by_role']} reassigned it: {t['body'].strip()}")
+                else:
+                    print(f"       ↳ {t['by_role']} answered: {t['body'].strip()}")
+                    if t["reply"]:
+                        print(f"         {row['raiser_name']} replied: {t['reply'].strip()}")
+
+        if me["approves"]:
+            print(f"\nSTATEMENTS TO REVIEW ({len(q['to_review'])}) — cp-approve, or cp-concern")
+            for row in q["to_review"]:
+                print(f"  {show(row)}")
+                if row["deliverable_id"]:
+                    for scope in db.scope_of(conn, row["deliverable_id"]):
+                        if scope["id"] != row["id"]:
+                            print(f"       scope of D-{row['deliverable_id']}: "
+                                  f"{scope['text'].strip()}")
+
+        if db.has_duty(conn, me["id"], "statements", "owns"):
+            print(f"\nREADY TO ACT ON ({len(q['ready'])}) — cp-statement, cp-deliverable, "
+                  "cp-milestone, or raise a new concern")
+            for row in q["ready"]:
+                print(f"  {show(row)}")
+                for c in db.awaiting_peter(conn, row["id"]):
+                    raiser = db.agent_by_id(conn, c["raised_by"])
+                    body = c["body"].strip().replace("\n", "\n         ")
+                    print(f"       C-{c['id']} [{c['kind']}] from {raiser['role']}: {body}")
+                    for t in thread(conn, c["id"]):
+                        if t["kind"] == "answer":
+                            print(f"         ↳ {t['by_role']} ({t['verdict'] or 'not judged'}): "
+                                  f"{t['body'].strip()}")
+            if q["homeless"]:
+                print(f"\nHOMELESS ({len(q['homeless'])}) — their deliverable was split or "
+                      "cancelled: cp-statement move")
+                for row in q["homeless"]:
+                    print(f"  {show(row)}")
+            if q["orphans"]:
+                print(f"\nMISSING A LINK ({len(q['orphans'])}) — what they point at was retired")
+                for row in q["orphans"]:
+                    print(f"  {show(row)}")
+        if q["stuck"]:
+            print(f"\nSTUCK ({len(q['stuck'])}) — cp-escalate sends one to the human early")
+            for row in q["stuck"]:
+                print(f"  C-{row['id']} on {db.about(row)}: {row['replies_since_reassign']} "
+                      f"replies since last reassigned")
+        if q["report_due"]:
+            print("\nREPORT DUE — cp-report run")
+        if q["milestones"]:
+            print(f"\nMILESTONE WORK ({len(q['milestones'])})")
+            for item in q["milestones"]:
+                if "milestone" in item:
+                    m = item["milestone"]
+                    print(f"  M-{m['id']} '{m['name']}' [{m['status']}] — {item['todo']}")
+                else:
+                    d = item["deliverable"]
+                    print(f"  D-{d['id']} '{d['name']}' — {item['todo']}")
+        if q["reports"]:
+            print(f"\nREPORTS WAITING FOR YOU ({len(q['reports'])}) — cp-report continue")
+            for row in q["reports"]:
+                print(f"  P-{row['id']} (round {row['round']})")
+        return 0
+
+    return run(go)
+
+
+# ------------------------------------------------------------------ approve
+
+def approve_main():
+    parser = base_parser("Approve a statement, or retract an approval with a concern")
+    parser.add_argument("--agent", required=True)
+    parser.add_argument("--statement", required=True, help="S-12")
+    parser.add_argument("--retract", action="store_true",
+                        help="withdraw your approval; needs --to and --body for the concern")
+    parser.add_argument("--to", help="who the retraction's concern is addressed to")
+    parser.add_argument("--kind", default="objection", help="the retraction concern's kind")
+    parser.add_argument("--body", help="why you are retracting")
+    args = parser.parse_args()
+
+    def go():
+        conn, me, turn = begin(args.db, args.agent, "approve")
+        if not me["approves"]:
+            raise Refused(f"{me['name']} does not approve statements")
+        row = db.statement(conn, db.parse_ref(args.statement, "S")[1])
+        if not db.is_live_statement(conn, row):
+            raise Refused(f"S-{row['id']} is {row['status']}")
+        mine = conn.execute("SELECT 1 FROM approvals WHERE statement_id = ? AND agent_id = ?",
+                            (row["id"], me["id"])).fetchone()
+
+        if not args.retract:
+            if row["deliverable_id"] and not db.is_live_deliverable(
+                    conn, db.deliverable(conn, row["deliverable_id"])):
+                raise Refused(f"S-{row['id']} is in a retired deliverable; Peter moves it first")
+            if mine:
+                raise Refused(f"you already approved S-{row['id']}")
+            own = conn.execute("SELECT id FROM concerns WHERE statement_id = ? AND raised_by = ? "
+                               "AND status = 'open'", (row["id"], me["id"])).fetchone()
+            if own:
+                raise Refused(f"your concern C-{own['id']} on S-{row['id']} is still open")
+            conn.execute("INSERT INTO approvals (statement_id, agent_id, round, turn_id, created_at) "
+                         "VALUES (?, ?, ?, ?, ?)",
+                         (row["id"], me["id"], turn["round"], turn["id"], db.now()))
+            db.record_event(conn, turn, "statement", row["id"], None, None,
+                            f"approved by {me['role']}")
+            finish(conn, turn)
+            print(f"S-{row['id']} approved by {me['name']}")
+            return 0
+
+        if not mine:
+            raise Refused(f"you have not approved S-{row['id']}, so there is nothing to retract "
+                          "— raise a concern instead")
+        if not args.to or not args.body:
+            raise Refused("a retraction comes with a concern saying why: --to <role> --body '...'")
+        them = db.require_active(conn, db.agent(conn, args.to), "be addressed")
+        if them["id"] == me["id"]:
+            raise Refused("an agent cannot address a concern to itself")
+        kind = db.term(conn, "concern_kinds", args.kind, "concern kind")
+        if kind["via_tool"]:
+            raise Refused(f"a '{kind['value']}' concern is raised with {kind['via_tool']}")
+        conn.execute("DELETE FROM approvals WHERE statement_id = ? AND agent_id = ?",
+                     (row["id"], me["id"]))
+        db.record_event(conn, turn, "statement", row["id"], None, None,
+                        f"approval retracted by {me['role']}")
+        cid = raise_concern(conn, turn, me, them, kind["value"], args.body, statement_id=row["id"])
+        finish(conn, turn)
+        print(f"S-{row['id']}: {me['name']} retracted, with C-{cid} to {them['name']}")
         return 0
 
     return run(go)
@@ -222,21 +509,18 @@ def queue_main():
 # ------------------------------------------------------------------ concern
 
 def concern_main():
-    parser = base_parser("Raise a concern with another agent")
+    parser = base_parser("Raise a concern on one statement or milestone, to one agent")
     parser.add_argument("--from", dest="sender", required=True)
     parser.add_argument("--to", dest="recipient", required=True)
     parser.add_argument("--kind", required=True)
+    parser.add_argument("--on", required=True, help="S-12 (a statement) or M-3 (a milestone)")
     parser.add_argument("--body", required=True)
-    parser.add_argument("--group", type=int, help="same concern sent to several agents")
-    parser.add_argument("--about", help="what prompted this: R-12 (a requirement) or C-3 (a concern)")
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.sender), "raise a concern")
+        conn, me, turn = begin(args.db, args.sender, "raise a concern")
         them = db.require_active(conn, db.agent(conn, args.recipient), "be addressed")
         kind = db.term(conn, "concern_kinds", args.kind, "concern kind")
-
         if kind["via_tool"]:
             raise Refused(f"a '{kind['value']}' concern is raised with {kind['via_tool']}, "
                           "which states what the human needs to decide it")
@@ -245,23 +529,19 @@ def concern_main():
                           f"{kind['must_address']}, not to {them['name']}")
         if me["id"] == them["id"]:
             raise Refused("an agent cannot address a concern to itself")
-        about_req, about_concern = db.about(conn, args.about, kind["about"], kind["value"])
-
-        round_no = db.state(conn)["round"]
-        cur = conn.execute(
-            """INSERT INTO concerns (kind, raised_by, addressed_to, body, about_requirement_id,
-                                     about_concern_id, raised_group, round)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (kind["value"], me["id"], them["id"], args.body, about_req, about_concern,
-             args.group, round_no),
-        )
-        conn.commit()
-        about_text = (f" about R-{about_req}" if about_req
-                      else f" about C-{about_concern}" if about_concern else "")
-        print(f"C-{cur.lastrowid} raised by {me['name']} to {them['name']} "
-              f"[{kind['value']}]{about_text}")
+        prefix, target = db.parse_ref(args.on, "SM")
+        if prefix == "S":
+            row = db.statement(conn, target)
+            if not db.is_live_statement(conn, row):
+                raise Refused(f"S-{target} is {row['status']}; raise it on what replaced it")
+            cid = raise_concern(conn, turn, me, them, kind["value"], args.body, statement_id=target)
+        else:
+            db.milestone(conn, target)
+            cid = raise_concern(conn, turn, me, them, kind["value"], args.body, milestone_id=target)
+        finish(conn, turn)
+        print(f"C-{cid} raised by {me['name']} to {them['name']} [{kind['value']}] on {args.on.upper()}")
         if them["id"] == HUMAN_ID:
-            print("the loop now pauses: this is addressed to the human")
+            print("the loop pauses until the human answers")
         return 0
 
     return run(go)
@@ -270,73 +550,63 @@ def concern_main():
 # ------------------------------------------------------------------- answer
 
 def answer_main():
-    parser = base_parser("Answer a concern addressed to you")
-    parser.add_argument("--concern", type=int, required=True)
+    parser = base_parser("Answer a concern addressed to you, or reassign it")
+    parser.add_argument("--concern", required=True, help="C-4")
     parser.add_argument("--from", dest="sender", required=True)
-    parser.add_argument("--kind", required=True)
-    parser.add_argument("--body", required=True)
-    parser.add_argument("--requirements", help="ids this answer created or changed, e.g. 12,14")
-    parser.add_argument("--reason", help="why nothing is changing")
-    parser.add_argument("--to", dest="recipient", help="who it goes to when escalating")
+    parser.add_argument("--body", required=True, help="the answer, or why you are reassigning")
+    parser.add_argument("--reassign-to", help="hand it to this agent instead of answering")
+    parser.add_argument("--final", action="store_true",
+                        help="the human only: this answer closes the concern")
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.sender), "answer")
-        row = db.concern(conn, args.concern)
-        kind = db.term(conn, "answer_kinds", args.kind, "answer kind")
-
+        conn, me, turn = begin(args.db, args.sender, "answer")
+        row = db.concern(conn, db.parse_ref(args.concern, "C")[1])
         if row["addressed_to"] != me["id"]:
-            owner = conn.execute("SELECT name FROM agents WHERE id=?", (row["addressed_to"],)).fetchone()
-            raise Refused(f"C-{row['id']} is addressed to {owner['name']}, not you")
-        if row["status"] not in ("open", "escalated"):
+            owner = db.agent_by_id(conn, row["addressed_to"])
+            raise Refused(f"C-{row['id']} is with {owner['name']}, not you")
+        if row["status"] != "open":
             raise Refused(f"C-{row['id']} is {row['status']}")
+        raiser = db.agent_by_id(conn, row["raised_by"])
         waiting = db.awaiting_verdict(conn, row["id"])
         if waiting:
-            raiser = conn.execute("SELECT name FROM agents WHERE id=?", (row["raised_by"],)).fetchone()
             raise Refused(f"A-{waiting['id']} is still with {raiser['name']} for a verdict — "
-                          "one answer at a time; wait for their yes or their reply")
+                          "one answer at a time")
 
-        req_ids = ids(args.requirements)
-        needs = kind["requires"]
-        if needs == "requirements" and not req_ids:
-            raise Refused(f"an answer of kind '{kind['value']}' must name the requirements it "
-                          "created or changed: --requirements 12,14 (use cp-propose first)")
-        if needs == "reason" and not args.reason:
-            raise Refused(f"an answer of kind '{kind['value']}' must say why: --reason '...'"
-                          + (f" (it is published under {kind['document_section']})"
-                             if kind["document_section"] else ""))
-        if needs == "recipient" and not args.recipient:
-            raise Refused(f"an answer of kind '{kind['value']}' must name who it goes to: --to pm|human")
-        for req_id in req_ids:
-            db.requirement(conn, req_id)
-
-        body = args.body if not args.reason else f"{args.body}\n\nReason: {args.reason}"
-        round_no = db.state(conn)["round"]
-        cur = conn.execute(
-            "INSERT INTO answers (concern_id, answered_by, kind, body, round) VALUES (?,?,?,?,?)",
-            (row["id"], me["id"], kind["value"], body, round_no),
-        )
-        for req_id in req_ids:
-            conn.execute("INSERT INTO answer_requirements (answer_id, requirement_id) VALUES (?,?)",
-                         (cur.lastrowid, req_id))
-            conn.execute(
-                "INSERT OR IGNORE INTO requirement_concerns (requirement_id, concern_id, relation) "
-                "VALUES (?,?,?)", (req_id, row["id"], "origin"),
-            )
-
-        if needs == "recipient":
-            them = db.require_active(conn, db.agent(conn, args.recipient), "be escalated to")
-            conn.execute("UPDATE concerns SET addressed_to = ?, status = 'open' WHERE id = ?",
-                         (them["id"], row["id"]))
-            print(f"A-{cur.lastrowid} escalates C-{row['id']} to {them['name']}")
+        if args.reassign_to:
+            if args.final:
+                raise Refused("a reassignment cannot be final")
+            them = db.require_active(conn, db.agent(conn, args.reassign_to), "be reassigned to")
+            if them["id"] == me["id"]:
+                raise Refused("it is already with you")
+            aid = db.reassign(conn, turn, row, them, me["id"], args.body)
+            finish(conn, turn)
+            print(f"A-{aid} reassigns C-{row['id']} to {them['name']}")
             if them["id"] == HUMAN_ID:
-                print("the loop now pauses: this is addressed to the human")
-        else:
-            raiser = conn.execute("SELECT name FROM agents WHERE id=?", (row["raised_by"],)).fetchone()
-            print(f"A-{cur.lastrowid} answers C-{row['id']} [{kind['value']}] — "
-                  f"awaiting {raiser['name']}'s review")
-        conn.commit()
+                print("the loop pauses until the human answers")
+            return 0
+
+        final = db.term(conn, "verdicts", "final", "verdict") if args.final else None
+        if final is not None and final["human_only"] and me["id"] != HUMAN_ID:
+            raise Refused("only the human can mark an answer final")
+        stamp = db.now()
+        cur = conn.execute(
+            """INSERT INTO answers (concern_id, answered_by, kind, body, verdict, round,
+                                    verdict_round, verdict_turn_id, turn_id, created_at)
+               VALUES (?, ?, 'answer', ?, ?, ?, ?, ?, ?, ?)""",
+            (row["id"], me["id"], args.body, final["value"] if final else None, turn["round"],
+             turn["round"] if final else None, turn["id"] if final else None, turn["id"], stamp))
+        if final is not None and final["closes"]:
+            conn.execute("UPDATE concerns SET status = 'closed', closed_round = ? WHERE id = ?",
+                         (turn["round"], row["id"]))
+            db.record_event(conn, turn, "concern", row["id"], "open", "closed",
+                            f"final answer A-{cur.lastrowid}")
+            finish(conn, turn)
+            print(f"A-{cur.lastrowid} answers C-{row['id']} and closes it (final)")
+            return 0
+        db.record_event(conn, turn, "concern", row["id"], None, None, f"answered A-{cur.lastrowid}")
+        finish(conn, turn)
+        print(f"A-{cur.lastrowid} answers C-{row['id']} — with {raiser['name']} for a verdict")
         return 0
 
     return run(go)
@@ -345,187 +615,600 @@ def answer_main():
 # ------------------------------------------------------------------- review
 
 def review_main():
-    parser = base_parser("Judge an answer to a concern you raised")
-    parser.add_argument("--answer", type=int, required=True)
+    parser = base_parser("Give a verdict on the latest answer to a concern you raised")
+    parser.add_argument("--answer", required=True, help="A-7")
     parser.add_argument("--by", required=True)
-    parser.add_argument("--satisfied", required=True, choices=["yes", "no"])
-    parser.add_argument("--reply", help="required when not satisfied")
+    parser.add_argument("--verdict", required=True, help="accepted, or replied")
+    parser.add_argument("--reply", help="what is still missing (required with replied)")
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.by), "review an answer")
-        row = conn.execute("SELECT * FROM answers WHERE id = ?", (args.answer,)).fetchone()
-        if row is None:
-            raise Refused(f"no answer A-{args.answer}")
-        parent = db.concern(conn, row["concern_id"])
+        conn, me, turn = begin(args.db, args.by, "judge an answer")
+        ans = db.answer(conn, db.parse_ref(args.answer, "A")[1])
+        parent = db.concern(conn, ans["concern_id"])
         if parent["raised_by"] != me["id"]:
             raise Refused(f"C-{parent['id']} is not yours to judge")
-        if row["satisfied"] is not None:
-            raise Refused(f"A-{row['id']} has already been judged")
-        waiting = db.awaiting_verdict(conn, parent["id"])
-        if waiting is None or waiting["id"] != row["id"]:
-            raise Refused(f"A-{row['id']} is a hand-off, not an answer to judge — "
-                          f"C-{parent['id']} is waiting on its new addressee"
-                          if waiting is None else
-                          f"judge the latest answer, A-{waiting['id']}")
-
-        satisfied = args.satisfied == "yes"
-        if not satisfied and not args.reply:
+        if parent["status"] != "open":
+            raise Refused(f"C-{parent['id']} is {parent['status']}")
+        verdict = db.term(conn, "verdicts", args.verdict, "verdict")
+        if verdict["human_only"]:
+            raise Refused("only the human marks their own answer final, with cp-answer --final")
+        latest = db.awaiting_verdict(conn, parent["id"])
+        if latest is None or latest["id"] != ans["id"]:
+            kind = db.term(conn, "answer_kinds", ans["kind"], "answer kind")
+            if not kind["judged"]:
+                raise Refused(f"A-{ans['id']} is a hand-off, not an answer to judge")
+            if ans["verdict"]:
+                raise Refused(f"A-{ans['id']} has already been judged")
+            raise Refused(f"judge the latest answer, A-{latest['id']}")
+        if verdict["needs_reply"] and not args.reply:
             raise Refused("say what is still missing: --reply '...'")
 
-        round_no = db.state(conn)["round"]
-        conn.execute("UPDATE answers SET satisfied = ?, reply = ?, reply_round = ? WHERE id = ?",
-                     (1 if satisfied else 0, args.reply, None if satisfied else round_no, row["id"]))
-        if satisfied:
-            conn.execute("UPDATE concerns SET status='resolved', resolved_round=? WHERE id=?",
-                         (round_no, parent["id"]))
-            print(f"A-{row['id']} accepted; C-{parent['id']} resolved")
-        else:
-            answerer = conn.execute("SELECT name FROM agents WHERE id=?", (row["answered_by"],)).fetchone()
-            print(f"A-{row['id']} sent back to {answerer['name']}; C-{parent['id']} stays open")
-        conn.commit()
+        conn.execute("UPDATE answers SET verdict = ?, reply = ?, verdict_round = ?, "
+                     "verdict_turn_id = ? WHERE id = ?",
+                     (verdict["value"], args.reply, turn["round"], turn["id"], ans["id"]))
+        if verdict["closes"]:
+            conn.execute("UPDATE concerns SET status = 'closed', closed_round = ? WHERE id = ?",
+                         (turn["round"], parent["id"]))
+            db.record_event(conn, turn, "concern", parent["id"], "open", "closed",
+                            f"A-{ans['id']} accepted")
+            finish(conn, turn)
+            print(f"A-{ans['id']} accepted; C-{parent['id']} closed"
+                  + (" — waiting for Peter to act on it" if parent["statement_id"] else ""))
+            return 0
+
+        conn.execute("UPDATE concerns SET replies_since_reassign = replies_since_reassign + 1, "
+                     "replies_total = replies_total + 1 WHERE id = ?", (parent["id"],))
+        db.record_event(conn, turn, "concern", parent["id"], None, None, f"replied on A-{ans['id']}")
+        parent = db.concern(conn, parent["id"])
+        answerer = db.agent_by_id(conn, ans["answered_by"])
+        limit = db.policy(conn, "stall_replies", 4)
+        if (parent["replies_since_reassign"] >= limit and parent["addressed_to"] != HUMAN_ID
+                and parent["raised_by"] != HUMAN_ID):
+            human = db.agent_by_id(conn, HUMAN_ID)
+            db.reassign(conn, turn, parent, human, me["id"],
+                        f"Automatic: {parent['replies_since_reassign']} replies since the last "
+                        "reassignment (policy stall_replies). Both positions are in the thread.")
+            finish(conn, turn)
+            print(f"A-{ans['id']} sent back; C-{parent['id']} has stalled and goes to the human")
+            return 0
+        finish(conn, turn)
+        print(f"A-{ans['id']} sent back to {answerer['name']}; C-{parent['id']} stays open")
         return 0
 
     return run(go)
 
 
-# ------------------------------------------------------------------ propose
+# ----------------------------------------------------------------- escalate
 
-def propose_main():
-    parser = base_parser("Propose a requirement")
-    parser.add_argument("--from", dest="sender", required=True)
-    parser.add_argument("--kind", required=True)
-    parser.add_argument("--statement", required=True, help="one testable sentence")
-    parser.add_argument("--rationale")
-    parser.add_argument("--concern", type=int, help="the concern this came out of")
-    parser.add_argument("--cost", help="cost flag, if your role may set one")
-    parser.add_argument("--supersedes", type=int, help="the requirement this rewords")
-    args = parser.parse_args()
-
-    def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.sender), "propose")
-        kind = db.term(conn, "requirement_kinds", args.kind, "requirement kind")
-        if args.cost:
-            flag = db.term(conn, "cost_flags", args.cost, "cost flag")
-            if flag["set_by"] and me["role"] not in (flag["set_by"], "human"):
-                raise Refused(f"only the {flag['set_by']} sets cost flags")
-        if args.concern:
-            db.concern(conn, args.concern)
-
-        round_no = db.state(conn)["round"]
-        old = db.requirement(conn, args.supersedes) if args.supersedes else None
-        if old is not None and old["status"] == "superseded":
-            raise Refused(f"R-{old['id']} is already superseded; reword the requirement that "
-                          "replaced it")
-        cur = conn.execute(
-            """INSERT INTO requirements (kind, statement, rationale, proposed_by, status,
-                                         cost_flag, created_round, supersedes_id)
-               VALUES (?, ?, ?, ?, 'proposed', ?, ?, ?)""",
-            (kind["value"], args.statement, args.rationale, me["id"], args.cost, round_no,
-             args.supersedes),
-        )
-        new_id = cur.lastrowid
-        if args.concern:
-            conn.execute(
-                "INSERT OR IGNORE INTO requirement_concerns (requirement_id, concern_id, relation) "
-                "VALUES (?,?,?)", (new_id, args.concern, "origin"),
-            )
-        db.record_event(conn, new_id, me["id"], None, "proposed", args.rationale, args.concern)
-        conn.commit()
-
-        print(f"R-{new_id} [{kind['value']}] proposed by {me['name']}")
-        print(f"the {kind['decided_by']} rules on a {kind['value']} requirement")
-        if old is not None:
-            print(f"R-{old['id']} stays {old['status']} until R-{new_id} is accepted")
-        return 0
-
-    return run(go)
-
-
-# ------------------------------------------------------------------- decide
-
-def decide_main():
-    parser = base_parser("Rule on a requirement")
-    parser.add_argument("--requirement", type=int, required=True)
+def escalate_main():
+    parser = base_parser("Send a stuck concern to the human early, with both positions")
+    parser.add_argument("--concern", required=True)
     parser.add_argument("--by", required=True)
-    parser.add_argument("--status", required=True)
-    parser.add_argument("--reason", help="required for anything that is not accepted")
-    parser.add_argument("--deliverable", type=int)
-    parser.add_argument("--concern", type=int, help="the concern that prompted this")
+    parser.add_argument("--summary", required=True, help="both positions, evenly")
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.by), "decide")
-        row = db.requirement(conn, args.requirement)
-        status = db.term(conn, "requirement_statuses", args.status, "status")
-        kind = db.term(conn, "requirement_kinds", row["kind"], "requirement kind")
+        conn, me, turn = begin(args.db, args.by, "escalate")
+        db.require_duty(conn, me, "escalation", "owns", "escalate a concern")
+        row = db.concern(conn, db.parse_ref(args.concern, "C")[1])
+        if row["status"] != "open":
+            raise Refused(f"C-{row['id']} is {row['status']}")
+        if row["addressed_to"] == HUMAN_ID:
+            raise Refused(f"C-{row['id']} is already with the human")
+        aid = db.reassign(conn, turn, row, db.agent_by_id(conn, HUMAN_ID), me["id"],
+                          f"Escalated by {me['name']}: {args.summary}")
+        finish(conn, turn)
+        print(f"A-{aid} sends C-{row['id']} to the human; the loop pauses")
+        return 0
 
-        if status["value"] in ("proposed", "superseded"):
-            raise Refused("decide on accepted, deferred or rejected "
-                          "(superseded happens through cp-propose --supersedes)")
-        if status["value"] != "accepted" and not args.reason:
-            raise Refused(f"say why it is {status['value']}: --reason '...' — it is shown under "
-                          f"{status['document_section'] or 'the document'}")
+    return run(go)
 
-        human = me["id"] == HUMAN_ID
-        if not human:
-            if me["role"] != kind["decided_by"]:
-                raise Refused(f"only the {kind['decided_by']} or the human rules on a "
-                              f"{kind['value']} requirement")
-            if db.policy(conn, "human_cuts_own_requests", 1) and status["value"] != "accepted":
-                # The interview runs through the PM's questions, so most of what the human
-                # wants arrives as their answers, not as concerns they raised.
-                asked_by_human = row["proposed_by"] == HUMAN_ID or conn.execute(
-                    """SELECT 1 FROM requirement_concerns rc
-                         JOIN concerns c ON c.id = rc.concern_id
-                        WHERE rc.requirement_id = ? AND rc.relation = 'origin'
-                          AND (c.raised_by = ?
-                               OR EXISTS (SELECT 1 FROM answers w
-                                           WHERE w.concern_id = c.id AND w.answered_by = ?))""",
-                    (row["id"], HUMAN_ID, HUMAN_ID),
-                ).fetchone() is not None
-                if asked_by_human:
-                    raise Refused("cutting something the human asked for is the human's call — "
-                                  "raise it with them instead (cp-concern --to human)")
 
-        if status["value"] == "accepted":
-            if db.policy(conn, "accept_needs_concerns_closed", 1):
-                still_open = db.open_concerns_on(conn, row["id"])
-                if still_open:
-                    raise Refused(
-                        f"R-{row['id']} still has open concern(s): "
-                        + ", ".join(f"C-{c['id']}" for c in still_open)
-                        + " — the raiser has to be satisfied first")
-            if db.policy(conn, "accept_needs_all_seen", 1):
-                unseen = db.unseen_by(conn, row, me["id"])
-                if unseen:
-                    raise Refused(
-                        f"R-{row['id']} has not been read yet by: "
-                        + ", ".join(a["role"] for a in unseen)
-                        + " — each gets a turn to raise a concern first")
+# --------------------------------------------------------------- statements
 
-        round_no = db.state(conn)["round"]
-        conn.execute(
-            """UPDATE requirements SET status=?, decided_by=?, decided_round=?, updated_round=?,
-                      deliverable_id=COALESCE(?, deliverable_id) WHERE id=?""",
-            (status["value"], me["id"], round_no, round_no, args.deliverable, row["id"]),
-        )
-        db.record_event(conn, row["id"], me["id"], row["status"], status["value"],
-                        args.reason, args.concern)
-        # A rewording replaces the original only once it is itself accepted.
-        old = db.requirement(conn, row["supersedes_id"]) if row["supersedes_id"] else None
-        if status["value"] == "accepted" and old is not None and old["status"] != "superseded":
-            conn.execute("UPDATE requirements SET status='superseded', updated_round=? WHERE id=?",
-                         (round_no, old["id"]))
-            db.record_event(conn, old["id"], me["id"], old["status"], "superseded",
-                            f"replaced by R-{row['id']}", args.concern)
-        conn.commit()
-        print(f"R-{row['id']} {row['status']} -> {status['value']} by {me['name']}")
-        if status["value"] == "accepted" and old is not None and old["status"] != "superseded":
-            print(f"R-{old['id']} {old['status']} -> superseded (replaced by R-{row['id']})")
+def cited(conn, because):
+    """The closed concerns on statements a write is based on."""
+    ids = db.ref_ids(because, "C")
+    if not ids:
+        raise Refused("cite the closed concerns this comes from: --because C-4,C-5")
+    rows = []
+    for cid in ids:
+        row = db.concern(conn, cid)
+        if row["status"] != "closed":
+            raise Refused(f"C-{cid} is still open — act once its raiser is satisfied")
+        rows.append(row)
+    return rows
+
+
+def check_guard(conn, kinds, concerns):
+    """A kind guarded by a role can only change on a concern that role answered or raised."""
+    for kind in kinds:
+        role = kind["guarded_by"]
+        if not role:
+            continue
+        guard = db.agent(conn, role)
+        ok = any(
+            c["raised_by"] == guard["id"] or conn.execute(
+                """SELECT 1 FROM answers w JOIN verdicts v ON v.value = w.verdict
+                    WHERE w.concern_id = ? AND w.answered_by = ? AND v.closes = 1""",
+                (c["id"], guard["id"])).fetchone()
+            for c in concerns)
+        if not ok:
+            names = ", ".join("C-%d" % c["id"] for c in concerns)
+            raise Refused(f"a {kind['value']} changes only on a concern the {role} answered or "
+                          f"raised; none of {names} is one — raise it with them first")
+
+
+def mark_acted(conn, turn, concerns, outcome):
+    for c in concerns:
+        if c["acted_on"] == outcome:
+            continue
+        conn.execute("UPDATE concerns SET acted_on = ?, acted_round = ? WHERE id = ?",
+                     (outcome, turn["round"], c["id"]))
+        db.record_event(conn, turn, "concern", c["id"], None, None, f"acted on: {outcome}")
+
+
+def retire(conn, turn, row, to_status, concerns, detail):
+    """Take a statement out of play, once every concern on it is settled and considered."""
+    if not db.is_live_statement(conn, row):
+        raise Refused(f"S-{row['id']} is already {row['status']}")
+    still_open = db.open_concerns_on(conn, row["id"])
+    if still_open:
+        raise Refused(f"S-{row['id']} still has open concern(s): "
+                      + ", ".join(f"C-{c['id']}" for c in still_open))
+    cited_ids = {c["id"] for c in concerns}
+    unread = [c for c in db.awaiting_peter(conn, row["id"]) if c["id"] not in cited_ids]
+    if unread:
+        raise Refused(f"S-{row['id']} has closed concerns you have not considered: "
+                      + ", ".join(f"C-{c['id']}" for c in unread)
+                      + " — cite them, or cp-statement keep them first")
+    conn.execute("UPDATE statements SET status = ?, retired_round = ? WHERE id = ?",
+                 (to_status, turn["round"], row["id"]))
+    db.record_event(conn, turn, "statement", row["id"], row["status"], to_status, detail)
+
+
+def write_statement(conn, turn, spec, concerns, milestone_id=None):
+    """Create one statement from {kind, text, rationale, deliverable, measures}."""
+    kind = db.term(conn, "statement_kinds", spec.get("kind"), "statement kind")
+    if not kind["writable"]:
+        raise Refused(f"a {kind['value']} is written only by cp-init")
+    text = (spec.get("text") or "").strip()
+    if not text:
+        raise Refused("a statement needs its text")
+    deliverable_id = None
+    if kind["level"] == "project":
+        if spec.get("deliverable"):
+            raise Refused(f"a {kind['value']} is project-wide; it has no deliverable")
+    else:
+        if not spec.get("deliverable"):
+            raise Refused(f"a {kind['value']} belongs to one deliverable: name it (D-1)")
+        deliverable_id = db.parse_ref(spec["deliverable"], "D")[1]
+        if not db.is_live_deliverable(conn, db.deliverable(conn, deliverable_id)):
+            raise Refused(f"D-{deliverable_id} is not live")
+
+    link_to = None
+    if kind["requires_link"]:
+        relation = db.term(conn, "link_relations", kind["requires_link"], "link relation")
+        if not spec.get(relation["value"]):
+            raise Refused(f"a {kind['value']} must name what it {relation['value']}: "
+                          f"--{relation['value']} S-3 (or \"{relation['value']}\" in --new)")
+        target = db.statement(conn, db.parse_ref(spec[relation["value"]], "S")[1])
+        wanted = cfg.kinds_list(relation["to_kinds"])
+        if wanted and target["kind"] not in wanted:
+            raise Refused(f"a {kind['value']} {relation['value']} a {' or '.join(wanted)}, "
+                          f"and S-{target['id']} is a {target['kind']}")
+        if not db.is_live_statement(conn, target):
+            raise Refused(f"S-{target['id']} is {target['status']}")
+        link_to = (target["id"], relation["value"])
+
+    stamp = db.now()
+    cur = conn.execute(
+        """INSERT INTO statements (kind, text, rationale, deliverable_id, milestone_id,
+                                   created_round, turn_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (kind["value"], text, spec.get("rationale"), deliverable_id, milestone_id,
+         turn["round"], turn["id"], stamp))
+    new_id = cur.lastrowid
+    for c in concerns:
+        conn.execute("INSERT INTO statement_reasons (statement_id, concern_id, turn_id, created_at) "
+                     "VALUES (?, ?, ?, ?)", (new_id, c["id"], turn["id"], stamp))
+    if link_to:
+        add_link(conn, turn, new_id, link_to[0], link_to[1])
+    db.record_event(conn, turn, "statement", new_id, None, "pending",
+                    "because " + ", ".join(f"C-{c['id']}" for c in concerns))
+    return new_id
+
+
+def add_link(conn, turn, from_id, to_id, relation):
+    conn.execute("INSERT INTO links (from_id, to_id, relation, turn_id, created_at) "
+                 "VALUES (?, ?, ?, ?, ?)", (from_id, to_id, relation, turn["id"], db.now()))
+
+
+def statement_main():
+    parser = base_parser("Peter's tool: write, supersede, move, cancel, or keep")
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    add = sub.add_parser("add", help="write a new statement")
+    add.add_argument("--kind", required=True)
+    add.add_argument("--text", required=True)
+    add.add_argument("--rationale")
+    add.add_argument("--deliverable", help="D-1, for deliverable-level kinds")
+    add.add_argument("--measures", help="S-3, for a success criterion: the goal it measures")
+
+    sup = sub.add_parser("supersede", help="replace one or more statements with one or more")
+    sup.add_argument("--old", required=True, help="S-2,S-9")
+    sup.add_argument("--new", action="append", required=True,
+                     help='JSON per new statement: {"kind", "text", "rationale", "deliverable", '
+                          '"measures"}; kind and deliverable default to the old one\'s')
+
+    move = sub.add_parser("move", help="move a statement to another deliverable")
+    move.add_argument("--statement", required=True)
+    move.add_argument("--to", required=True, help="D-2")
+
+    cancel = sub.add_parser("cancel", help="drop a statement, replacing it with nothing")
+    cancel.add_argument("--statement", required=True)
+    cancel.add_argument("--reason", required=True)
+
+    keep = sub.add_parser("keep", help="considered: no change needed")
+    keep.add_argument("--note")
+
+    for p in (add, sup, move, cancel, keep):
+        p.add_argument("--by", required=True)
+        p.add_argument("--because", required=True, help="the closed concerns: C-4,C-5")
+    args = parser.parse_args()
+
+    def go():
+        conn, me, turn = begin(args.db, args.by, "write statements")
+        db.require_duty(conn, me, "statements", "owns", "write statements")
+        concerns = cited(conn, args.because)
+        for c in concerns:
+            if c["statement_id"] is None:
+                raise Refused(f"C-{c['id']} is on a milestone; statements come from concerns "
+                              "on statements")
+
+        if args.action == "keep":
+            for c in concerns:
+                if c["acted_on"]:
+                    raise Refused(f"C-{c['id']} was already acted on ({c['acted_on']})")
+            mark_acted(conn, turn, concerns, "kept")
+            finish(conn, turn)
+            print("kept as is: " + ", ".join(f"C-{c['id']}" for c in concerns))
+            return 0
+
+        if args.action == "add":
+            kind = db.term(conn, "statement_kinds", args.kind, "statement kind")
+            check_guard(conn, [kind], concerns)
+            new_id = write_statement(conn, turn, {
+                "kind": args.kind, "text": args.text, "rationale": args.rationale,
+                "deliverable": args.deliverable, "measures": args.measures}, concerns)
+            mark_acted(conn, turn, concerns, "changed")
+            finish(conn, turn)
+            print(f"S-{new_id} [{args.kind}] written — every approver reviews it")
+            return 0
+
+        if args.action == "cancel":
+            row = db.statement(conn, db.parse_ref(args.statement, "S")[1])
+            check_guard(conn, [db.term(conn, "statement_kinds", row["kind"], "kind")], concerns)
+            retire(conn, turn, row, "cancelled", concerns, args.reason)
+            mark_acted(conn, turn, concerns, "changed")
+            finish(conn, turn)
+            print(f"S-{row['id']} cancelled")
+            return 0
+
+        if args.action == "move":
+            row = db.statement(conn, db.parse_ref(args.statement, "S")[1])
+            kind = db.term(conn, "statement_kinds", row["kind"], "kind")
+            if kind["level"] != "deliverable":
+                raise Refused(f"a {kind['value']} is project-wide; it has no deliverable to move")
+            target = db.parse_ref(args.to, "D")[1]
+            if target == row["deliverable_id"]:
+                raise Refused(f"S-{row['id']} is already in D-{target}")
+            retire(conn, turn, row, "superseded", concerns, f"moved to D-{target}")
+            new_id = write_statement(conn, turn, {
+                "kind": row["kind"], "text": row["text"], "rationale": row["rationale"],
+                "deliverable": f"D-{target}"}, concerns)
+            add_link(conn, turn, new_id, row["id"], "supersedes")
+            mark_acted(conn, turn, concerns, "changed")
+            finish(conn, turn)
+            print(f"S-{row['id']} moved to D-{target} as S-{new_id} — every approver reviews it")
+            return 0
+
+        # supersede
+        olds = [db.statement(conn, sid) for sid in db.ref_ids(args.old, "S")]
+        try:
+            specs = [json.loads(text) for text in args.new]
+        except json.JSONDecodeError as exc:
+            raise Refused(f"--new must be JSON: {exc}")
+        if len(olds) == 1:
+            for spec in specs:
+                spec.setdefault("kind", olds[0]["kind"])
+                if olds[0]["deliverable_id"]:
+                    spec.setdefault("deliverable", f"D-{olds[0]['deliverable_id']}")
+        kinds = [db.term(conn, "statement_kinds", r["kind"], "kind") for r in olds]
+        kinds += [db.term(conn, "statement_kinds", s.get("kind"), "statement kind") for s in specs]
+        check_guard(conn, kinds, concerns)
+        milestone_id = next((r["milestone_id"] for r in olds if r["milestone_id"]), None)
+        new_ids = [write_statement(conn, turn, spec, concerns, milestone_id) for spec in specs]
+        for row in olds:
+            retire(conn, turn, row, "superseded",
+                   concerns, "replaced by " + ", ".join(f"S-{n}" for n in new_ids))
+            for new_id in new_ids:
+                add_link(conn, turn, new_id, row["id"], "supersedes")
+        mark_acted(conn, turn, concerns, "changed")
+        finish(conn, turn)
+        print(", ".join(f"S-{r['id']}" for r in olds) + " superseded by "
+              + ", ".join(f"S-{n}" for n in new_ids) + " — every approver reviews them")
+        return 0
+
+    return run(go)
+
+
+# ------------------------------------------------------------- deliverables
+
+def deliverable_main():
+    parser = base_parser("Peter's tool: add, split, or cancel a deliverable")
+    sub = parser.add_subparsers(dest="action", required=True)
+    add = sub.add_parser("add", help="a new deliverable")
+    add.add_argument("--name", required=True)
+    split = sub.add_parser("split", help="replace one deliverable with several")
+    split.add_argument("--old", required=True, help="D-1")
+    split.add_argument("--into", required=True, help="names, comma-separated: v1,v2")
+    cancel = sub.add_parser("cancel", help="drop an empty deliverable")
+    cancel.add_argument("--old", required=True)
+    for p in (add, split, cancel):
+        p.add_argument("--by", required=True)
+        p.add_argument("--because", required=True, help="the closed concerns: C-4")
+    args = parser.parse_args()
+
+    def create(conn, turn, name):
+        seq = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM deliverables").fetchone()["n"]
+        cur = conn.execute(
+            """INSERT INTO deliverables (name, seq, created_round, turn_id, created_at)
+               VALUES (?, ?, ?, ?, ?)""", (name, seq, turn["round"], turn["id"], db.now()))
+        db.record_event(conn, turn, "deliverable", cur.lastrowid, None, "live", name)
+        return cur.lastrowid
+
+    def go():
+        conn, me, turn = begin(args.db, args.by, "change deliverables")
+        db.require_duty(conn, me, "deliverables", "owns", "change deliverables")
+        concerns = cited(conn, args.because)
+
+        if args.action == "add":
+            did = create(conn, turn, args.name)
+            mark_acted(conn, turn, concerns, "changed")
+            finish(conn, turn)
+            print(f"D-{did} '{args.name}' added — it needs a scope statement")
+            return 0
+
+        old = db.deliverable(conn, db.parse_ref(args.old, "D")[1])
+        if not db.is_live_deliverable(conn, old):
+            raise Refused(f"D-{old['id']} is {old['status']}")
+
+        if args.action == "cancel":
+            inside = conn.execute("SELECT id FROM statements WHERE deliverable_id = ? AND status IN "
+                                  "('pending', 'agreed')", (old["id"],)).fetchall()
+            if inside:
+                raise Refused(f"D-{old['id']} still holds "
+                              + ", ".join(f"S-{r['id']}" for r in inside)
+                              + " — move or cancel them first")
+            conn.execute("UPDATE deliverables SET status = 'cancelled', retired_round = ? "
+                         "WHERE id = ?", (turn["round"], old["id"]))
+            db.record_event(conn, turn, "deliverable", old["id"], "live", "cancelled")
+            mark_acted(conn, turn, concerns, "changed")
+            finish(conn, turn)
+            print(f"D-{old['id']} cancelled")
+            return 0
+
+        names = [n.strip() for n in args.into.split(",") if n.strip()]
+        if len(names) < 2:
+            raise Refused("a split makes at least two deliverables: --into v1,v2")
+        new_ids = [create(conn, turn, name) for name in names]
+        for new_id in new_ids:
+            conn.execute("INSERT INTO deliverable_lineage (old_id, new_id, turn_id, created_at) "
+                         "VALUES (?, ?, ?, ?)", (old["id"], new_id, turn["id"], db.now()))
+        conn.execute("UPDATE deliverables SET status = 'superseded', retired_round = ? WHERE id = ?",
+                     (turn["round"], old["id"]))
+        db.record_event(conn, turn, "deliverable", old["id"], "live", "superseded",
+                        "split into " + ", ".join(f"D-{n}" for n in new_ids))
+        mark_acted(conn, turn, concerns, "changed")
+        finish(conn, turn)
+        print(f"D-{old['id']} split into " + ", ".join(f"D-{n}" for n in new_ids)
+              + " — move each of its statements (cp-statement move) and write each a scope")
+        return 0
+
+    return run(go)
+
+
+# --------------------------------------------------------------- milestones
+
+def milestone_main():
+    parser = base_parser("Milestones: written by Peter, reviewed, checked, built, accepted")
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    add = sub.add_parser("add", help="Peter: write a milestone")
+    add.add_argument("--deliverable", required=True)
+    add.add_argument("--name", required=True)
+    add.add_argument("--intent")
+    add.add_argument("--because", required=True, help="the closed concerns proposing it")
+
+    assign = sub.add_parser("assign", help="Peter: put agreed statements in a planned milestone")
+    assign.add_argument("--milestone", required=True)
+    assign.add_argument("--statements", required=True, help="S-9,S-12")
+
+    for name, helptext in (("review", "the architect: pass or fail the slicing"),
+                           ("check", "the developer: is it buildable from its file?")):
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("--milestone", required=True)
+        p.add_argument("--ok", required=True, choices=["yes", "no"])
+        p.add_argument("--note", help="what is wrong (required with --ok no)")
+
+    start = sub.add_parser("start", help="the human: build this milestone next")
+    start.add_argument("--milestone", required=True)
+    start.add_argument("--branch", help="defaults to m-<id>-<name>")
+
+    for name, helptext in (("submit", "the developer: built, ready for review"),
+                           ("pass", "QA or code review: nothing more from me"),
+                           ("merge", "the developer: merge it"),
+                           ("accept", "the human: tried it, satisfied")):
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("--milestone", required=True)
+
+    for p in sub.choices.values():
+        p.add_argument("--by", required=True)
+    args = parser.parse_args()
+
+    def move(conn, turn, row, to_status, detail=None):
+        conn.execute("UPDATE milestones SET status = ? WHERE id = ?", (to_status, row["id"]))
+        db.record_event(conn, turn, "milestone", row["id"], row["status"], to_status, detail)
+
+    def open_on(conn, row):
+        return conn.execute("SELECT id FROM concerns WHERE milestone_id = ? AND status = 'open'",
+                            (row["id"],)).fetchall()
+
+    def go():
+        conn, me, turn = begin(args.db, args.by, "act on a milestone")
+
+        if args.action == "add":
+            db.require_duty(conn, me, "milestones", "owns", "write a milestone")
+            parent = db.deliverable(conn, db.parse_ref(args.deliverable, "D")[1])
+            if not db.is_live_deliverable(conn, parent):
+                raise Refused(f"D-{parent['id']} is {parent['status']}")
+            concerns = cited(conn, args.because)
+            seq = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM milestones "
+                               "WHERE deliverable_id = ?", (parent["id"],)).fetchone()["n"]
+            stamp = db.now()
+            cur = conn.execute(
+                """INSERT INTO milestones (deliverable_id, name, seq, intent, turn_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (parent["id"], args.name, seq, args.intent, turn["id"], stamp))
+            for c in concerns:
+                conn.execute("INSERT INTO milestone_reasons (milestone_id, concern_id, turn_id, "
+                             "created_at) VALUES (?, ?, ?, ?)", (cur.lastrowid, c["id"], turn["id"],
+                                                                 stamp))
+            db.record_event(conn, turn, "milestone", cur.lastrowid, None, "planned", args.name)
+            mark_acted(conn, turn, [c for c in concerns if c["statement_id"]], "changed")
+            finish(conn, turn)
+            print(f"M-{cur.lastrowid} '{args.name}' in D-{parent['id']} — assign its statements")
+            return 0
+
+        row = db.milestone(conn, db.parse_ref(args.milestone, "M")[1])
+
+        if args.action == "assign":
+            db.require_duty(conn, me, "milestones", "owns", "assign statements")
+            if row["status"] != "planned":
+                raise Refused(f"M-{row['id']} is {row['status']}; only a planned milestone "
+                              "takes new statements")
+            for sid in db.ref_ids(args.statements, "S"):
+                s = db.statement(conn, sid)
+                if s["deliverable_id"] != row["deliverable_id"]:
+                    raise Refused(f"S-{sid} is not in D-{row['deliverable_id']}")
+                if s["status"] != "agreed":
+                    raise Refused(f"S-{sid} is {s['status']}; only agreed statements are built")
+                conn.execute("UPDATE statements SET milestone_id = ? WHERE id = ?", (row["id"], sid))
+                db.record_event(conn, turn, "statement", sid, None, None, f"assigned to M-{row['id']}")
+            finish(conn, turn)
+            print(f"assigned to M-{row['id']}")
+            return 0
+
+        if args.action in ("review", "check"):
+            duty, relation, column = (("slicing", "reviews", "sliced_ok_by")
+                                      if args.action == "review"
+                                      else ("buildability", "checks", "checked_ok_by"))
+            db.require_duty(conn, me, duty, relation, f"{args.action} a milestone")
+            if row["status"] != "planned":
+                raise Refused(f"M-{row['id']} is {row['status']}")
+            if args.ok == "no":
+                if not args.note:
+                    raise Refused("say what is wrong: --note '...'")
+                owner = db.who(conn, "milestones", "owns")[0]
+                cid = raise_concern(conn, turn, me, owner, "objection", args.note,
+                                    milestone_id=row["id"])
+                finish(conn, turn)
+                print(f"M-{row['id']} not passed — C-{cid} to {owner['name']}")
+                return 0
+            conn.execute(f"UPDATE milestones SET {column} = ? WHERE id = ?", (me["id"], row["id"]))
+            db.record_event(conn, turn, "milestone", row["id"], None, None,
+                            f"{duty} passed by {me['role']}")
+            finish(conn, turn)
+            print(f"M-{row['id']} {duty} passed by {me['name']}")
+            return 0
+
+        if args.action == "start":
+            db.require_duty(conn, me, "acceptance", "rules_on", "start a milestone")
+            if row["status"] != "planned":
+                raise Refused(f"M-{row['id']} is {row['status']}")
+            if not row["sliced_ok_by"] or not row["checked_ok_by"]:
+                raise Refused(f"M-{row['id']} needs the slicing review and the buildability check")
+            inside = conn.execute("SELECT id, status FROM statements WHERE milestone_id = ?",
+                                  (row["id"],)).fetchall()
+            if not inside:
+                raise Refused(f"M-{row['id']} has no statements assigned")
+            if any(s["status"] != "agreed" for s in inside):
+                raise Refused(f"M-{row['id']} holds statements that are not agreed")
+            if open_on(conn, row):
+                raise Refused(f"M-{row['id']} has open concerns")
+            branch = args.branch or f"m-{row['id']}-" + re.sub(r"[^a-z0-9]+", "-",
+                                                               row["name"].lower()).strip("-")
+            conn.execute("UPDATE milestones SET branch = ? WHERE id = ?", (branch, row["id"]))
+            move(conn, turn, row, "building", f"branch {branch}")
+            finish(conn, turn)
+            print(f"M-{row['id']} building on {branch}")
+            return 0
+
+        if args.action == "submit":
+            db.require_duty(conn, me, "code", "owns", "submit a milestone")
+            if row["status"] != "building":
+                raise Refused(f"M-{row['id']} is {row['status']}")
+            move(conn, turn, row, "in_review")
+            finish(conn, turn)
+            print(f"M-{row['id']} in review")
+            return 0
+
+        if args.action == "pass":
+            column = None
+            if db.has_duty(conn, me["id"], "testing", "owns"):
+                column = "tested_ok_by"
+            elif db.has_duty(conn, me["id"], "code_review", "owns"):
+                column = "reviewed_ok_by"
+            else:
+                raise Refused(f"{me['name']} neither tests nor reviews code")
+            if row["status"] != "in_review":
+                raise Refused(f"M-{row['id']} is {row['status']}")
+            mine = conn.execute("SELECT id FROM concerns WHERE milestone_id = ? AND raised_by = ? "
+                                "AND status = 'open'", (row["id"], me["id"])).fetchone()
+            if mine:
+                raise Refused(f"your concern C-{mine['id']} on M-{row['id']} is still open")
+            conn.execute(f"UPDATE milestones SET {column} = ? WHERE id = ?", (me["id"], row["id"]))
+            db.record_event(conn, turn, "milestone", row["id"], None, None, f"passed by {me['role']}")
+            finish(conn, turn)
+            print(f"M-{row['id']} passed by {me['name']}")
+            return 0
+
+        if args.action == "merge":
+            db.require_duty(conn, me, "code", "owns", "merge a milestone")
+            if row["status"] != "in_review":
+                raise Refused(f"M-{row['id']} is {row['status']}")
+            if not row["tested_ok_by"] or not row["reviewed_ok_by"]:
+                raise Refused(f"M-{row['id']} needs a pass from QA and from code review")
+            still = open_on(conn, row)
+            if still:
+                raise Refused(f"M-{row['id']} has open concerns: "
+                              + ", ".join(f"C-{c['id']}" for c in still))
+            move(conn, turn, row, "merged", f"branch {row['branch']}")
+            finish(conn, turn)
+            print(f"M-{row['id']} merged — the human tries it next")
+            return 0
+
+        # accept
+        db.require_duty(conn, me, "acceptance", "rules_on", "accept a milestone")
+        if row["status"] != "merged":
+            raise Refused(f"M-{row['id']} is {row['status']}")
+        if open_on(conn, row):
+            raise Refused(f"M-{row['id']} has open concerns")
+        move(conn, turn, row, "accepted")
+        finish(conn, turn)
+        print(f"M-{row['id']} accepted")
         return 0
 
     return run(go)
@@ -536,330 +1219,205 @@ def decide_main():
 def staff_main():
     parser = base_parser("Ask the human to bring another agent into the project")
     sub = parser.add_subparsers(dest="action", required=True)
-
     request = sub.add_parser("request", help="ask for an agent")
     request.add_argument("--agent", required=True)
     request.add_argument("--by", required=True)
+    request.add_argument("--on", required=True, help="the statement that triggered it: S-12")
     request.add_argument("--reason", required=True, help="what triggered it")
-    request.add_argument("--cost", help="what it will cost in constraints, rounds, money")
-    request.add_argument("--about", help="the requirement or concern that triggered it: R-12 or C-3")
-
-    approve = sub.add_parser("approve", help="bring them in")
+    request.add_argument("--cost", help="what it will cost in constraints, rounds, spend")
+    approve = sub.add_parser("approve", help="the human: bring them in")
     approve.add_argument("--agent", required=True)
-    approve.add_argument("--concern", type=int)
+    approve.add_argument("--concern", required=True)
     approve.add_argument("--by", default="human")
-
-    decline = sub.add_parser("decline", help="do not bring them in")
+    decline = sub.add_parser("decline", help="the human: do not")
     decline.add_argument("--agent", required=True)
-    decline.add_argument("--concern", type=int, required=True)
-    decline.add_argument("--reason", required=True)
+    decline.add_argument("--concern", required=True)
+    decline.add_argument("--reason", required=True, help="defer or drop the trigger, and why")
     decline.add_argument("--by", default="human")
-
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
+        conn, me, turn = begin(args.db, args.by, "staff")
         target = db.agent(conn, args.agent)
         st = db.state(conn)
-        round_no = st["round"]
 
         if args.action == "request":
-            me = db.require_active(conn, db.agent(conn, args.by), "request staffing")
             if target["active"]:
                 raise Refused(f"{target['name']} is already in the project")
             if target["joins_at_phase"] > st["phase"]:
                 raise Refused(f"{target['name']} joins at phase {target['joins_at_phase']}; "
                               f"this project is in phase {st['phase']}")
-            kind = db.term(conn, "concern_kinds", "staffing", "concern kind")
-            about_req, about_concern = db.about(conn, args.about, kind["about"], kind["value"])
-            decider = db.who(conn, "staffing", "rules_on")
-            if not decider:
-                raise Refused("nobody in this roster rules on staffing")
-            body = (
-                f"Bring in {target['name']}?\n"
-                f"  their brief: {target['motivation'].strip()}\n"
-                f"  trigger:     {args.reason}\n"
-                f"  joins when:  {target['join_trigger'] or 'n/a'}\n"
-                f"  cost:        {args.cost or 'more constraints, more rounds, more spend'}\n"
-                f"  alternatives: defer or drop the requirement that triggered this."
-            )
+            trigger = db.statement(conn, db.parse_ref(args.on, "S")[1])
             if target["auto_staff"]:
-                conn.execute(
-                    "UPDATE agents SET active=1, joined_round=?, requested_by=? WHERE id=?",
-                    (round_no, me["id"], target["id"]),
-                )
-                conn.commit()
-                print(f"{target['name']} joined in round {round_no} (auto_staff)")
+                conn.execute("UPDATE agents SET active = 1, joined_round = ?, joined_turn_id = ?, "
+                             "requested_by = ? WHERE id = ?",
+                             (turn["round"], turn["id"], me["id"], target["id"]))
+                db.record_event(conn, turn, "agent", target["id"], "inactive", "active", "auto_staff")
+                finish(conn, turn)
+                print(f"{target['name']} joined (auto_staff)")
                 return 0
-            cur = conn.execute(
-                """INSERT INTO concerns (kind, raised_by, addressed_to, body, about_requirement_id,
-                                         about_concern_id, round) VALUES (?,?,?,?,?,?,?)""",
-                (kind["value"], me["id"], decider[0]["id"], body, about_req, about_concern,
-                 round_no),
-            )
-            conn.commit()
-            print(f"C-{cur.lastrowid} staffing request for {target['name']} -> {decider[0]['name']}")
-            if decider[0]["id"] == HUMAN_ID:
-                print("the loop now pauses: this is addressed to the human")
+            deciders = db.who(conn, "staffing", "rules_on")
+            if not deciders:
+                raise Refused("nobody in this roster rules on staffing")
+            kind = db.term(conn, "concern_kinds", "staffing", "concern kind")
+            body = (f"Bring in {target['name']}?\n"
+                    f"  they argue for: {target['motivation'].strip()}\n"
+                    f"  trigger:        S-{trigger['id']}: {args.reason}\n"
+                    f"  joins when:     {target['join_trigger'] or 'n/a'}\n"
+                    f"  cost:           {args.cost or 'more concerns, more rounds, more spend'}\n"
+                    f"  or instead:     defer or drop S-{trigger['id']}.")
+            cid = raise_concern(conn, turn, me, deciders[0], kind["value"], body,
+                                statement_id=trigger["id"])
+            finish(conn, turn)
+            print(f"C-{cid} staffing request for {target['name']} -> {deciders[0]['name']}")
             return 0
 
-        me = db.agent(conn, args.by)
-        db.require_duty(conn, me, "staffing", "rules_on", "approve or decline an agent")
-        parent = db.concern(conn, args.concern) if args.concern else None
-
+        db.require_duty(conn, me, "staffing", "rules_on", "decide staffing")
+        row = db.concern(conn, db.parse_ref(args.concern, "C")[1])
+        if row["kind"] != "staffing" or row["status"] != "open":
+            raise Refused(f"C-{row['id']} is not an open staffing request")
         if args.action == "approve":
             if target["active"]:
                 raise Refused(f"{target['name']} is already in the project")
-            conn.execute(
-                "UPDATE agents SET active=1, joined_round=?, requested_by=? WHERE id=?",
-                (round_no, parent["raised_by"] if parent else me["id"], target["id"]),
-            )
-            if parent:
-                conn.execute(
-                    "INSERT INTO answers (concern_id, answered_by, kind, body, satisfied, round) "
-                    "VALUES (?,?,'accepted',?,1,?)",
-                    (parent["id"], me["id"],
-                     f"Approved. {target['name']} joins in round {round_no}.", round_no),
-                )
-                conn.execute("UPDATE concerns SET status='resolved', resolved_round=? WHERE id=?",
-                             (round_no, parent["id"]))
-            conn.commit()
-            print(f"{target['name']} joined in round {round_no}")
-            return 0
-
-        conn.execute(
-            "INSERT INTO answers (concern_id, answered_by, kind, body, satisfied, round) "
-            "VALUES (?,?,'rejected',?,1,?)",
-            (parent["id"], me["id"], f"Declined. Reason: {args.reason}", round_no),
-        )
-        conn.execute("UPDATE concerns SET status='resolved', resolved_round=? WHERE id=?",
-                     (round_no, parent["id"]))
-        conn.commit()
-        print(f"{target['name']} stays out. C-{parent['id']} resolved")
+            conn.execute("UPDATE agents SET active = 1, joined_round = ?, joined_turn_id = ?, "
+                         "requested_by = ? WHERE id = ?",
+                         (turn["round"], turn["id"], row["raised_by"], target["id"]))
+            db.record_event(conn, turn, "agent", target["id"], "inactive", "active",
+                            f"approved on C-{row['id']}")
+            body = (f"Approved. {target['name']} joins in round {turn['round']} and reviews "
+                    "every live statement.")
+        else:
+            body = f"Declined. {args.reason}"
+        stamp = db.now()
+        cur = conn.execute(
+            """INSERT INTO answers (concern_id, answered_by, kind, body, verdict, round,
+                                    verdict_round, verdict_turn_id, turn_id, created_at)
+               VALUES (?, ?, 'answer', ?, 'final', ?, ?, ?, ?, ?)""",
+            (row["id"], me["id"], body, turn["round"], turn["round"], turn["id"], turn["id"],
+             stamp))
+        conn.execute("UPDATE concerns SET status = 'closed', closed_round = ? WHERE id = ?",
+                     (turn["round"], row["id"]))
+        db.record_event(conn, turn, "concern", row["id"], "open", "closed",
+                        f"staffing {args.action}d (A-{cur.lastrowid})")
+        finish(conn, turn)
+        print(f"{target['name']}: {args.action}d. C-{row['id']} closed — Peter acts on it")
         return 0
 
     return run(go)
 
 
-# -------------------------------------------------------- deliverables
+# ------------------------------------------------------------------- report
 
-def deliverable_main():
-    parser = base_parser("Propose or rule on a deliverable (v1, v2, ...)")
+def build_report(conn, report_no, since_turn):
+    st = db.state(conn)
+    lines = [f"# Report P-{report_no} — round {st['round']}, phase {st['phase']} "
+             f"({st['phase_name']})", ""]
+    turns = conn.execute(
+        """SELECT t.*, a.role FROM turns t JOIN agents a ON a.id = t.agent_id
+            WHERE t.id > ? ORDER BY t.id""", (since_turn,)).fetchall()
+    taken = [t for t in turns if t["status"] == "done"]
+    tokens = sum(t["tokens"] or 0 for t in turns)
+    lines.append(f"Turns since the last report: {len(taken)} taken, "
+                 f"{len(turns) - len(taken)} skipped"
+                 + (f", {tokens} tokens" if tokens else "") + ".")
+
+    def since(obj, where):
+        return conn.execute(
+            f"""SELECT e.*, a.role FROM events e LEFT JOIN agents a ON a.id = e.actor
+                 WHERE e.object = ? AND (e.turn_id > ? OR e.turn_id IS NULL AND e.id > ?)
+                   AND {where} ORDER BY e.id""",
+            (obj, since_turn, 0 if not since_turn else conn.execute(
+                "SELECT COALESCE(MAX(id), 0) AS n FROM events WHERE turn_id <= ?",
+                (since_turn,)).fetchone()["n"])).fetchall()
+
+    agreed = {e["object_id"] for e in since("statement", "e.to_status = 'agreed'")}
+    agreed = [db.statement(conn, sid) for sid in sorted(agreed)]
+    agreed = [s for s in agreed if s["status"] == "agreed"]
+    lines += ["", f"## Newly agreed ({len(agreed)})"]
+    lines += [f"- {show(s)}" for s in agreed] or ["- none"]
+
+    writers = [a["id"] for a in db.who(conn, "statements", "owns")]
+    changes = [e for e in since("statement", "(e.from_status IS NULL AND e.to_status = 'pending') "
+                                             "OR e.to_status IN ('superseded', 'cancelled')")
+               if e["actor"] in writers]
+    lines += ["", f"## What Peter changed ({len(changes)})"]
+    for e in changes:
+        s = db.statement(conn, e["object_id"])
+        verb = "wrote" if e["to_status"] == "pending" else e["to_status"]
+        lines.append(f"- {verb} S-{s['id']} [{s['kind']}] {s['text'].strip()} — {e['detail'] or ''}")
+    if not changes:
+        lines.append("- nothing")
+
+    kept = since("concern", "e.detail = 'acted on: kept'")
+    if kept:
+        lines += ["", f"## Considered and kept as is ({len(kept)})"]
+        for e in kept:
+            c = db.concern(conn, e["object_id"])
+            lines.append(f"- C-{c['id']} on {db.about(c)}: {c['body'].strip()}")
+
+    waiting = conn.execute("SELECT * FROM concerns WHERE status = 'open' AND addressed_to = ?",
+                           (HUMAN_ID,)).fetchall()
+    if waiting:
+        lines += ["", f"## Waiting for you ({len(waiting)})"]
+        lines += [f"- C-{c['id']} [{c['kind']}] on {db.about(c)}: {c['body'].strip()}"
+                  for c in waiting]
+    stuck, bouncing = db.stuck(conn), db.bouncing(conn)
+    if stuck or bouncing:
+        lines += ["", "## Threads to watch"]
+        lines += [f"- C-{c['id']} stuck: {c['replies_since_reassign']} replies since reassigned"
+                  for c in stuck]
+        lines += [f"- C-{c['id']} bouncing: {c['replies_total']} replies in total"
+                  for c in bouncing]
+
+    lines += ["", "## What each agent said"]
+    for t in taken:
+        if t["summary"]:
+            lines.append(f"- T-{t['id']} {t['role']} (round {t['round']}): {t['summary'].strip()}")
+    return "\n".join(lines) + "\n"
+
+
+def report_main():
+    parser = base_parser("The periodic report to the human, which pauses the loop")
     sub = parser.add_subparsers(dest="action", required=True)
-
-    propose = sub.add_parser("propose")
-    propose.add_argument("--from", dest="sender", required=True)
-    propose.add_argument("--name", required=True)
-    propose.add_argument("--intent", required=True, help="who it is useful to, and for what")
-    propose.add_argument("--seq", type=int)
-
-    decide = sub.add_parser("decide")
-    decide.add_argument("--id", type=int, required=True)
-    decide.add_argument("--by", required=True)
-    decide.add_argument("--status", required=True)
-
+    runp = sub.add_parser("run", help="Peter: write the report; the loop pauses")
+    runp.add_argument("--by", required=True)
+    cont = sub.add_parser("continue", help="the human: read it, carry on")
+    cont.add_argument("--by", default="human")
+    cont.add_argument("--report", help="P-2; defaults to the one waiting")
     args = parser.parse_args()
 
     def go():
-        conn = db.connect(args.db)
-        round_no = db.state(conn)["round"]
-        if args.action == "propose":
-            me = db.require_active(conn, db.agent(conn, args.sender), "propose a deliverable")
-            db.require_duty(conn, me, "deliverables", "owns", "propose a deliverable")
-            db.require_phase(conn, me, "propose a deliverable")
-            seq = args.seq or (conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM deliverables").fetchone()["n"])
-            cur = conn.execute(
-                "INSERT INTO deliverables (name, seq, intent, proposed_by) VALUES (?,?,?,?)",
-                (args.name, seq, args.intent, me["id"]),
-            )
-            conn.commit()
-            rulers = db.who(conn, "deliverables", "rules_on")
-            print(f"D-{cur.lastrowid} '{args.name}' proposed by {me['name']} (seq {seq})")
-            print(f"ruled on by: {', '.join(r['role'] for r in rulers) or 'nobody'}")
+        conn, me, turn = begin(args.db, args.by, "report")
+        if args.action == "run":
+            db.require_duty(conn, me, "reporting", "owns", "run the report")
+            if conn.execute("SELECT 1 FROM reports WHERE continued_at IS NULL").fetchone():
+                raise Refused("a report is already waiting for the human")
+            last = conn.execute("SELECT turn_id FROM reports ORDER BY id DESC LIMIT 1").fetchone()
+            report_no = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM reports"
+                                     ).fetchone()["n"]
+            body = build_report(conn, report_no, last["turn_id"] if last else 0)
+            cur = conn.execute("INSERT INTO reports (round, turn_id, body, created_at) "
+                               "VALUES (?, ?, ?, ?)", (turn["round"], turn["id"], body, db.now()))
+            db.record_event(conn, turn, "report", cur.lastrowid, None, "waiting")
+            finish(conn, turn)
+            print(body)
+            print(f"P-{cur.lastrowid} written; the loop pauses until the human continues")
             return 0
 
-        me = db.require_active(conn, db.agent(conn, args.by), "rule on a deliverable")
-        db.require_duty(conn, me, "deliverables", "rules_on", "rule on a deliverable")
-        row = db.deliverable(conn, args.id)
-        status = db.term(conn, "deliverable_statuses", args.status, "deliverable status")
-        conn.execute("UPDATE deliverables SET status=?, decided_by=?, decided_round=? WHERE id=?",
-                     (status["value"], me["id"], round_no, row["id"]))
-        conn.commit()
-        print(f"D-{row['id']} {row['status']} -> {status['value']} by {me['name']}")
-        return 0
-
-    return run(go)
-
-
-# ----------------------------------------------------------- milestones
-
-def milestone_main():
-    parser = base_parser("Propose, rule on, review or check a milestone")
-    sub = parser.add_subparsers(dest="action", required=True)
-
-    propose = sub.add_parser("propose")
-    propose.add_argument("--from", dest="sender", required=True)
-    propose.add_argument("--deliverable", type=int, required=True)
-    propose.add_argument("--name", required=True)
-    propose.add_argument("--intent", required=True)
-    propose.add_argument("--seq", type=int)
-
-    decide = sub.add_parser("decide")
-    decide.add_argument("--id", type=int, required=True)
-    decide.add_argument("--by", required=True)
-    decide.add_argument("--status", required=True)
-    decide.add_argument("--file", dest="file_path")
-
-    review = sub.add_parser("review", help="pass or fail the slicing")
-    review.add_argument("--id", type=int, required=True)
-    review.add_argument("--by", required=True)
-    review.add_argument("--ok", required=True, choices=["yes", "no"])
-    review.add_argument("--note")
-
-    check = sub.add_parser("check", help="confirm the milestone file is buildable")
-    check.add_argument("--id", type=int, required=True)
-    check.add_argument("--by", required=True)
-    check.add_argument("--ok", required=True, choices=["yes", "no"])
-    check.add_argument("--note")
-
-    assign = sub.add_parser("assign", help="put a requirement in a milestone")
-    assign.add_argument("--requirement", type=int, required=True)
-    assign.add_argument("--id", type=int, required=True)
-    assign.add_argument("--by", required=True)
-
-    args = parser.parse_args()
-
-    def go():
-        conn = db.connect(args.db)
-        round_no = db.state(conn)["round"]
-
-        if args.action == "propose":
-            me = db.require_active(conn, db.agent(conn, args.sender), "propose a milestone")
-            db.require_duty(conn, me, "milestones", "owns", "propose a milestone")
-            db.require_phase(conn, me, "propose a milestone")
-            parent = db.deliverable(conn, args.deliverable)
-            seq = args.seq or (conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM milestones WHERE deliverable_id = ?",
-                (parent["id"],)).fetchone()["n"])
-            cur = conn.execute(
-                """INSERT INTO milestones (deliverable_id, name, seq, intent, proposed_by)
-                   VALUES (?,?,?,?,?)""",
-                (parent["id"], args.name, seq, args.intent, me["id"]),
-            )
-            conn.commit()
-            reviewers = db.who(conn, "slicing", "reviews")
-            print(f"M-{cur.lastrowid} '{args.name}' in D-{parent['id']} proposed by {me['name']}")
-            print(f"slicing reviewed by: {', '.join(r['role'] for r in reviewers) or 'nobody'}")
-            return 0
-
-        if args.action == "assign":
-            me = db.require_active(conn, db.agent(conn, args.by), "assign a requirement")
-            db.require_duty(conn, me, "milestones", "rules_on", "assign a requirement")
-            row = db.milestone(conn, args.id)
-            req = db.requirement(conn, args.requirement)
-            if req["status"] != "accepted":
-                raise Refused(f"R-{req['id']} is {req['status']}; only accepted requirements "
-                              "go into a milestone")
-            conn.execute("UPDATE requirements SET milestone_id=?, deliverable_id=?, updated_round=? "
-                         "WHERE id=?", (row["id"], row["deliverable_id"], round_no, req["id"]))
-            conn.commit()
-            print(f"R-{req['id']} assigned to M-{row['id']}")
-            return 0
-
-        me = db.require_active(conn, db.agent(conn, args.by), "act on a milestone")
-        row = db.milestone(conn, args.id)
-
-        if args.action == "review":
-            db.require_duty(conn, me, "slicing", "reviews", "pass or fail the slicing")
-            if args.ok == "no":
-                if not args.note:
-                    raise Refused("say what is wrong with the slicing: --note '...'")
-                kind = "objection"
-                cur = conn.execute(
-                    "INSERT INTO concerns (kind, raised_by, addressed_to, body, round) "
-                    "VALUES (?,?,?,?,?)",
-                    (kind, me["id"], row["proposed_by"],
-                     f"M-{row['id']} '{row['name']}' sent back: {args.note}", round_no),
-                )
-                conn.commit()
-                print(f"M-{row['id']} sent back — C-{cur.lastrowid} to the proposer")
-                return 0
-            conn.execute("UPDATE milestones SET sliced_ok_by=? WHERE id=?", (me["id"], row["id"]))
-            conn.commit()
-            print(f"M-{row['id']} slicing passed by {me['name']}")
-            return 0
-
-        if args.action == "check":
-            db.require_duty(conn, me, "buildability", "checks", "check buildability")
-            if args.ok == "no":
-                if not args.note:
-                    raise Refused("say what is missing from the milestone file: --note '...'")
-                rulers = db.who(conn, "milestones", "rules_on")
-                cur = conn.execute(
-                    "INSERT INTO concerns (kind, raised_by, addressed_to, body, round) "
-                    "VALUES ('question',?,?,?,?)",
-                    (me["id"], rulers[0]["id"] if rulers else HUMAN_ID,
-                     f"M-{row['id']} '{row['name']}' is not buildable as written: {args.note}",
-                     round_no),
-                )
-                conn.commit()
-                print(f"M-{row['id']} not buildable — C-{cur.lastrowid} raised")
-                return 0
-            conn.execute("UPDATE milestones SET buildable_ok_by=? WHERE id=?", (me["id"], row["id"]))
-            conn.commit()
-            print(f"M-{row['id']} confirmed buildable by {me['name']}")
-            return 0
-
-        # decide
-        db.require_duty(conn, me, "milestones", "rules_on", "rule on a milestone")
-        status = db.term(conn, "milestone_statuses", args.status, "milestone status")
-        if status["value"] == "planned" and not row["sliced_ok_by"]:
-            reviewers = db.who(conn, "slicing", "reviews")
-            raise Refused(f"M-{row['id']} has not passed slicing review "
-                          f"({', '.join(r['role'] for r in reviewers) or 'nobody'} must pass it first)")
-        conn.execute(
-            "UPDATE milestones SET status=?, decided_by=?, decided_round=?, "
-            "file_path=COALESCE(?, file_path) WHERE id=?",
-            (status["value"], me["id"], round_no, args.file_path, row["id"]),
-        )
-        conn.commit()
-        print(f"M-{row['id']} {row['status']} -> {status['value']} by {me['name']}")
-        return 0
-
-    return run(go)
-
-
-# ------------------------------------------------------------------ signoff
-
-def signoff_main():
-    parser = base_parser("Declare you have nothing further to raise")
-    parser.add_argument("--agent", required=True)
-    parser.add_argument("--note")
-    args = parser.parse_args()
-
-    def go():
-        conn = db.connect(args.db)
-        me = db.require_active(conn, db.agent(conn, args.agent), "sign off")
-        mail = db.outstanding(conn, me)
-        reviews = db.to_review(conn, me)
-        if mail or reviews:
-            raise Refused(f"{len(mail)} concern(s) to answer and {len(reviews)} answer(s) to "
-                          "review first — run cp-queue")
-        waiting = db.waiting_on(conn, me)
-        if waiting:
-            raise Refused("your own concern(s) are still open: "
-                          + ", ".join(f"C-{c['id']}" for c in waiting)
-                          + " — sign off once they are settled")
-        st = db.state(conn)
-        conn.execute(
-            "INSERT OR REPLACE INTO signoffs (agent_id, round, change_mark, note) VALUES (?,?,?,?)",
-            (me["id"], st["round"], st["change_mark"], args.note),
-        )
-        conn.execute("UPDATE agents SET last_seen_change = ? WHERE id = ?",
-                     (st["change_mark"], me["id"]))
-        conn.commit()
-        print(f"{me['name']} signed off at change mark {st['change_mark']}")
+        if me["id"] != HUMAN_ID:
+            raise Refused("only the human continues after a report")
+        row = conn.execute(
+            "SELECT * FROM reports WHERE continued_at IS NULL ORDER BY id LIMIT 1").fetchone()
+        if args.report:
+            row = conn.execute("SELECT * FROM reports WHERE id = ?",
+                               (db.parse_ref(args.report, "P")[1],)).fetchone()
+        if row is None or row["continued_at"]:
+            raise Refused("no report is waiting")
+        conn.execute("UPDATE reports SET continued_at = ?, continued_turn_id = ? WHERE id = ?",
+                     (db.now(), turn["id"], row["id"]))
+        db.record_event(conn, turn, "report", row["id"], "waiting", "continued")
+        finish(conn, turn)
+        print(f"P-{row['id']} read; the loop continues")
         return 0
 
     return run(go)
@@ -875,56 +1433,43 @@ def state_main():
     def go():
         conn = db.connect(args.db)
         st = db.state(conn)
-        waiting = db.pause_reason(conn)
-        stalls = db.stalled(conn)
-        active = conn.execute(
-            """SELECT a.* FROM agents a JOIN agent_phases p ON p.agent_id = a.id
-                WHERE a.active = 1 AND p.phase = ? ORDER BY a.id""", (st["phase"],)).fetchall()
-        signed = {r["agent_id"] for r in conn.execute(
-            "SELECT agent_id FROM signoffs WHERE change_mark = ?", (st["change_mark"],))}
-        open_count = conn.execute("SELECT COUNT(*) c FROM concerns WHERE status='open'").fetchone()["c"]
-        by_status = conn.execute(
-            "SELECT status, COUNT(*) c FROM requirements GROUP BY status ORDER BY status").fetchall()
-        pending = [a for a in active if a["id"] not in signed and a["id"] != HUMAN_ID]
-        abandoned = db.abandoned_drafts(conn)
-
+        running = db.running_turn(conn)
+        taken = {r["agent_id"] for r in conn.execute(
+            "SELECT agent_id FROM turns WHERE round = ?", (st["round"],))}
+        left = [a["role"] for a in db.rotation(conn) if a["id"] not in taken]
+        by_status = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM statements GROUP BY status")}
+        open_count = conn.execute("SELECT COUNT(*) AS n FROM concerns WHERE status = 'open'"
+                                  ).fetchone()["n"]
+        waiting_peter = len(db.awaiting_peter(conn))
+        active = [a["role"] for a in conn.execute("SELECT role FROM agents WHERE active = 1 "
+                                                  "ORDER BY seq")]
+        payload = {
+            "round": st["round"], "phase": st["phase"], "phase_name": st["phase_name"],
+            "status": st["status"], "paused": st["status"] == "paused",
+            "paused_reason": st["paused_reason"], "paused_ref": st["paused_ref"],
+            "current_turn": running["id"] if running else None,
+            "left_this_round": left, "report_due": db.report_due(conn),
+            "statements": by_status, "open_concerns": open_count,
+            "awaiting_peter": waiting_peter, "active": active,
+            "converged": st["status"] == "converged", "ends_when": st["ends_when"].strip(),
+            "change_mark": st["change_mark"],
+        }
         if args.json:
-            print(json.dumps({
-                "round": st["round"], "phase": st["phase"], "phase_name": st["phase_name"],
-                "ends_when": st["ends_when"].strip(), "change_mark": st["change_mark"],
-                "paused": bool(waiting),
-                "waiting_on_human": [dict(r) for r in waiting],
-                "stalled": [dict(r) for r in stalls],
-                "abandoned_drafts": [dict(r) for r in abandoned],
-                "open_concerns": open_count,
-                "requirements": {r["status"]: r["c"] for r in by_status},
-                "active": [a["role"] for a in active],
-                "not_signed_off": [a["role"] for a in pending],
-                "converged": not waiting and open_count == 0 and not pending,
-            }, indent=2))
+            print(json.dumps(payload, indent=2))
             return 0
-
-        print(f"round {st['round']}, phase {st['phase']} ({st['phase_name']}), "
-              f"change mark {st['change_mark']}")
-        print(f"  ends when:   {st['ends_when'].strip()}")
-        print(f"  active:      {', '.join(a['role'] for a in active)}")
-        print(f"  concerns:    {open_count} open")
-        print("  requirements: " + (", ".join(f"{r['c']} {r['status']}" for r in by_status) or "none"))
-        if stalls:
-            print(f"\nSTALLED ({len(stalls)}): " + ", ".join(f"C-{r['id']}" for r in stalls))
-        if abandoned:
-            print(f"\nABANDONED DRAFTS ({len(abandoned)}) — their concerns closed without them; "
-                  "reject or revive:")
-            for row in abandoned:
-                print(f"  R-{row['id']} {row['statement'].strip()}")
-        if waiting:
-            print(f"\nPAUSED — waiting on the human ({len(waiting)}):")
-            for row in waiting:
-                print(f"  C-{row['id']} [{row['kind']}] from {row['raiser']}")
-        elif open_count == 0 and not pending:
-            print("\nCONVERGED — no open concerns, every active agent has signed off")
-        else:
-            print(f"\nrunning — not signed off: {', '.join(a['role'] for a in pending) or 'none'}")
+        print(f"round {st['round']}, phase {st['phase']} ({st['phase_name']}) — {st['status']}")
+        if st["status"] == "paused":
+            what = "P" if st["paused_reason"] == "report" else "C"
+            print(f"  paused on:    {what}-{st['paused_ref']} (the human's turn)")
+        print(f"  ends when:    {st['ends_when'].strip()}")
+        print(f"  active:       {', '.join(active)}")
+        print(f"  turn:         " + (f"T-{running['id']} running" if running else "none running"))
+        print(f"  left:         {', '.join(left) or 'nobody — cp-round --advance'}")
+        print("  statements:   " + (", ".join(f"{n} {s}" for s, n in by_status.items()) or "none"))
+        print(f"  concerns:     {open_count} open, {waiting_peter} closed and waiting for Peter")
+        if payload["report_due"]:
+            print("  report due:   Peter runs cp-report run this round")
         return 0
 
     return run(go)
@@ -933,7 +1478,7 @@ def state_main():
 # ---------------------------------------------------------- round and phase
 
 def round_main():
-    parser = base_parser("Advance the round counter, or move to the next phase")
+    parser = base_parser("Advance the round, or move the project to another phase")
     parser.add_argument("--advance", action="store_true")
     parser.add_argument("--phase", type=int, help="move the project to this phase")
     args = parser.parse_args()
@@ -941,23 +1486,38 @@ def round_main():
     def go():
         conn = db.connect(args.db)
         st = db.state(conn)
+        if db.running_turn(conn):
+            raise Refused("a turn is still running")
         if args.phase:
-            row = conn.execute("SELECT * FROM phases WHERE number = ?", (args.phase,)).fetchone()
-            if row is None:
-                raise Refused(f"no phase {args.phase}")
-            conn.execute("UPDATE project_state SET phase=?, updated_at=? WHERE id=1",
+            if not conn.execute("SELECT 1 FROM phases WHERE number = ?", (args.phase,)).fetchone():
+                raise Refused(f"there is no phase {args.phase}")
+            if st["phase"] == 1 and args.phase > 1 and st["status"] != "converged":
+                raise Refused("phase 1 has not converged: " + st["ends_when"].strip())
+            conn.execute("UPDATE project_state SET phase = ?, updated_at = ? WHERE id = 1",
                          (args.phase, db.now()))
+            db.record_event(conn, None, "project", 1, None, None,
+                            f"phase {st['phase']} -> {args.phase}")
+            db.refresh(conn, None)
             conn.commit()
-            print(f"phase {st['phase']} -> {args.phase} ({row['name']})")
-            print(f"ends when: {row['ends_when'].strip()}")
+            print(f"phase {st['phase']} -> {args.phase}")
             return 0
         if not args.advance:
-            raise Refused("nothing to do: pass --advance or --phase N")
-        waiting = db.pause_reason(conn)
-        if waiting:
-            raise Refused(f"{len(waiting)} concern(s) are with the human; the loop is paused")
-        conn.execute("UPDATE project_state SET round = ?, updated_at = ? WHERE id = 1",
-                     (st["round"] + 1, db.now()))
+            parser.error("give --advance or --phase N")
+        if st["status"] == "paused":
+            raise Refused("the loop is paused for the human")
+        if st["status"] == "converged":
+            raise Refused("phase 1 has converged — cp-round --phase 2")
+        taken = {r["agent_id"] for r in conn.execute(
+            "SELECT agent_id FROM turns WHERE round = ?", (st["round"],))}
+        left = [a["role"] for a in db.rotation(conn) if a["id"] not in taken]
+        if left:
+            raise Refused(f"not everyone has had a turn this round: {', '.join(left)} "
+                          "— cp-turn next")
+        if db.report_due(conn):
+            raise Refused("a report is due this round — Peter runs cp-report run")
+        conn.execute("UPDATE project_state SET round = round + 1, updated_at = ? WHERE id = 1",
+                     (db.now(),))
+        db.record_event(conn, None, "project", 1, None, None, f"round {st['round'] + 1}")
         conn.commit()
         print(f"round {st['round']} -> {st['round'] + 1}")
         return 0
@@ -968,17 +1528,17 @@ def round_main():
 # ------------------------------------------------------------------- policy
 
 def policy_main():
-    parser = base_parser("The rules in force: thresholds, duties, and who decides what")
-    parser.add_argument("--agent", help="show one agent's motivation, phases and duties")
+    parser = base_parser("The rules in force: thresholds, kinds, verdicts, duties, turn order")
+    parser.add_argument("--agent", help="one agent's motivation, phases and duties")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     def go():
         conn = db.connect(args.db)
         settings = [dict(r) for r in conn.execute("SELECT * FROM policy ORDER BY key")]
-        kinds = [dict(r) for r in db.vocab(conn, "requirement_kinds")]
-        answers = [dict(r) for r in db.vocab(conn, "answer_kinds")]
-        concerns = [dict(r) for r in db.vocab(conn, "concern_kinds")]
+        kinds = [dict(r) for r in db.vocab(conn, "statement_kinds")]
+        verdicts = [dict(r) for r in db.vocab(conn, "verdicts")]
+        concern_kinds = [dict(r) for r in db.vocab(conn, "concern_kinds")]
 
         if args.agent:
             me = db.agent(conn, args.agent)
@@ -986,34 +1546,44 @@ def policy_main():
             phases = db.phases_of(conn, me["id"])
             if args.json:
                 print(json.dumps({"agent": dict(me), "duties": duties, "phases": phases,
-                                  "policy": settings}, indent=2))
+                                  "policy": settings, "statement_kinds": kinds,
+                                  "concern_kinds": concern_kinds}, indent=2))
                 return 0
             print(f"{me['name']} ({me['role']})")
             print(f"  argues for: {me['motivation'].strip()}")
             print(f"  phases:     {', '.join(str(p) for p in phases)}")
+            print(f"  approves:   {'every live statement' if me['approves'] else 'nothing'}")
             print(f"  joins at:   phase {me['joins_at_phase']}"
                   + (f" — {me['join_trigger']}" if me["join_trigger"] else ""))
             for duty in duties:
                 print(f"  {duty['relation']:9} {duty['duty']} — {duty['description'].strip()}")
             print("\nthresholds")
             for setting in settings:
-                print(f"  {setting['key']:24} {setting['value']}")
+                print(f"  {setting['key']:22} {setting['value']}")
+            print("\nconcern kinds")
+            for kind in concern_kinds:
+                print(f"  {kind['value']:10} {kind['description'].strip()}")
             return 0
 
         if args.json:
-            print(json.dumps({"policy": settings, "requirement_kinds": kinds,
-                              "answer_kinds": answers, "concern_kinds": concerns}, indent=2))
+            print(json.dumps({"policy": settings, "statement_kinds": kinds, "verdicts": verdicts,
+                              "concern_kinds": concern_kinds}, indent=2))
             return 0
-
         print("thresholds")
         for setting in settings:
-            print(f"  {setting['key']:24} {setting['value']}  — {setting['description'].strip()}")
-        print("\nwho rules on a requirement")
+            print(f"  {setting['key']:22} {setting['value']}  — {setting['description'].strip()}")
+        print("\nstatement kinds            level        changed only with   must link")
         for kind in kinds:
-            print(f"  {kind['value']:18} {kind['decided_by']}")
-        print("\nwhat an answer must carry")
-        for kind in answers:
-            print(f"  {kind['value']:18} {kind['requires'] or '—'}")
+            print(f"  {kind['value']:24} {kind['level']:12} {kind['guarded_by'] or '—':19} "
+                  f"{kind['requires_link'] or '—'}")
+        print("\nverdicts")
+        for v in verdicts:
+            print(f"  {v['value']:10} {v['description'].strip()}")
+        print("\nturn order")
+        for a in conn.execute("SELECT role, active, approves FROM agents WHERE id <> ? ORDER BY seq",
+                              (HUMAN_ID,)):
+            print(f"  {a['role']:12} {'active' if a['active'] else 'not staffed':12} "
+                  f"{'approves' if a['approves'] else ''}")
         print("\nduties")
         for row in conn.execute(
                 """SELECT d.relation, d.duty, a.role FROM agent_duties d
@@ -1030,10 +1600,16 @@ def policy_main():
 POLICY_IN_PROSE = re.compile(
     r"\b(two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(rounds|replies)\b", re.I)
 EMPHASIS = re.compile(r"[*_`]")
+TOOL_NAME = re.compile(r"\bcp-[a-z]+\b")
+
+
+def registered_tools():
+    text = (cfg.ROOT / "pyproject.toml").read_text()
+    return set(re.findall(r"^(cp-[a-z]+)\s*=", text, re.M))
 
 
 def doctor_main():
-    parser = base_parser("Check the config, the charters and the database for drift")
+    parser = base_parser("Check the config, the charters, the skill and the database for drift")
     parser.add_argument("--config", default=str(cfg.DEFAULT_CONFIG))
     parser.add_argument("--agents-dir", default=str(cfg.ROOT / ".claude" / "agents"))
     args = parser.parse_args()
@@ -1073,37 +1649,50 @@ def doctor_main():
         if path.name != "protocol.md" and path.name not in roster_paths:
             findings.append(("charter", f"{path}: no agent in pipeline.yaml points to it"))
 
-    # Numbers that belong to policy should not be restated in prose.
     docs = list(Path(args.agents_dir).glob("*.md"))
     skills = cfg.ROOT / ".claude" / "skills"
     if skills.exists():
         docs += list(skills.rglob("*.md"))
+    tools = registered_tools()
     for path in docs:
         for line in path.read_text().splitlines():
             if POLICY_IN_PROSE.search(EMPHASIS.sub("", line)) and "cp-policy" not in line:
                 findings.append(("policy", f"{path.relative_to(cfg.ROOT)}: a threshold in prose "
                                            f"— read it from cp-policy instead: {line.strip()[:70]}"))
+            for name in sorted(set(TOOL_NAME.findall(line)) - tools):
+                findings.append(("tools", f"{path.relative_to(cfg.ROOT)}: mentions {name}, "
+                                          "which is not a registered tool"))
 
-    # Duties nobody holds
     duties = {d["value"] for d in configuration.get("duties") or []}
     held = {duty for agent in agents for relation in cfg.DUTY_RELATIONS
             for duty in agent.get(relation) or []}
     for duty in sorted(duties - held):
         findings.append(("duties", f"'{duty}' is declared but no agent holds it"))
 
-    # The database, if there is one
     path = Path(args.db)
     if path.exists():
         conn = db.connect(str(path))
         for name in cfg.VOCABULARIES:
-            in_db = {r["value"] for r in db.vocab(conn, name)}
+            try:
+                in_db = {r["value"] for r in db.vocab(conn, name)}
+            except Exception:
+                findings.append(("database", f"{path} predates this schema — rebuild it"))
+                break
             in_yaml = {e["value"] for e in configuration["vocabularies"][name]}
             for value in sorted(in_yaml - in_db):
                 findings.append(("database", f"{name}: '{value}' is in pipeline.yaml but not in "
-                                             f"{path} — re-run cp-init"))
+                                             f"{path} — rebuild it"))
             for value in sorted(in_db - in_yaml):
                 findings.append(("database", f"{name}: '{value}' is in {path} but not in "
                                              "pipeline.yaml"))
+        in_db = {(r["role"], r["duty"], r["relation"]) for r in conn.execute(
+            "SELECT a.role, d.duty, d.relation FROM agent_duties d JOIN agents a ON a.id = d.agent_id")}
+        in_yaml = {(a["role"], duty, relation) for a in agents for relation in cfg.DUTY_RELATIONS
+                   for duty in a.get(relation) or []}
+        for role, duty, relation in sorted(in_yaml ^ in_db):
+            where = "pipeline.yaml" if (role, duty, relation) in in_yaml else str(path)
+            findings.append(("database", f"{role} {relation} {duty} is only in {where} "
+                                         "— the database predates the config"))
 
     if not findings:
         print("no drift found")
@@ -1118,88 +1707,103 @@ def doctor_main():
 
 def render_main():
     parser = base_parser("Generate a document from the tables")
-    parser.add_argument("what", choices=["requirements"])
+    parser.add_argument("document", choices=["requirements"])
     parser.add_argument("--out", help="write to this file instead of stdout")
     args = parser.parse_args()
 
     def go():
         conn = db.connect(args.db)
         st = db.state(conn)
+        live = ("pending", "agreed")
+        mark = lambda s: "" if s["status"] == "agreed" else f" *({s['status']})*"
         lines = ["# Requirements", "",
                  f"*Generated from the project database — round {st['round']}, "
-                 f"change mark {st['change_mark']}.*", ""]
+                 f"change mark {st['change_mark']}. Unmarked statements are agreed.*", ""]
 
-        # Section order comes from the vocabularies, so a new kind or status
-        # appears in the document without touching this code.
+        kinds = db.vocab(conn, "statement_kinds")
         sections = []
-        for kind in db.vocab(conn, "requirement_kinds"):
-            if kind["document_section"] and kind["document_section"] not in sections:
+        for kind in kinds:
+            if kind["level"] == "project" and kind["document_section"] not in sections:
                 sections.append(kind["document_section"])
-        for status in db.vocab(conn, "requirement_statuses"):
-            if status["in_document"] and status["document_section"] \
-                    and status["document_section"] not in sections:
-                sections.append(status["document_section"])
-        for answer in db.vocab(conn, "answer_kinds"):
-            if answer["document_section"] and answer["document_section"] not in sections:
-                sections.append(answer["document_section"])
-
-        rows = conn.execute(
-            """SELECT r.*, g.name AS proposer, k.document_section AS kind_section,
-                      s.in_document, s.document_section AS status_section,
-                      e.reason AS last_reason
-                 FROM requirements r
-                 JOIN agents g ON g.id = r.proposed_by
-                 JOIN requirement_kinds k ON k.value = r.kind
-                 JOIN requirement_statuses s ON s.value = r.status
-                 LEFT JOIN requirement_events e ON e.id = (
-                      SELECT MAX(id) FROM requirement_events WHERE requirement_id = r.id)
-                ORDER BY r.id""").fetchall()
-
-        risks = conn.execute(
-            """SELECT c.id, c.body, w.body AS answer, g.name AS answerer,
-                      k.document_section AS section
-                 FROM answers w
-                 JOIN concerns c ON c.id = w.concern_id
-                 JOIN agents g ON g.id = w.answered_by
-                 JOIN answer_kinds k ON k.value = w.kind
-                WHERE k.document_section IS NOT NULL AND w.satisfied = 1
-                ORDER BY c.id""").fetchall()
+        measured = {}
+        for link in conn.execute("SELECT * FROM links WHERE relation = 'measures'"):
+            measured.setdefault(link["to_id"], []).append(link["from_id"])
+        nested = {i for ids in measured.values() for i in ids}
 
         for section in sections:
+            rows = conn.execute(
+                """SELECT s.* FROM statements s JOIN statement_kinds k ON k.value = s.kind
+                    WHERE k.level = 'project' AND k.document_section = ? AND s.status IN (?, ?)
+                    ORDER BY k.seq, s.id""", (section, *live)).fetchall()
+            rows = [r for r in rows if r["id"] not in nested]
+            if not rows:
+                continue
             lines += [f"## {section}", ""]
-            written = 0
-            for row in rows:
-                if not row["in_document"]:
-                    continue
-                where = row["status_section"] or row["kind_section"]
-                if where != section:
-                    continue
-                written += 1
-                lines.append(f"- **R-{row['id']}** ({row['kind']}) {row['statement']}")
-                detail = [f"raised by {row['proposer']}"]
-                if row["status"] != "accepted":
-                    detail.append(f"{row['status']}: {row['last_reason'] or 'no reason recorded'}")
-                if row["cost_flag"]:
-                    detail.append(f"cost: {row['cost_flag']}")
-                if row["rationale"]:
-                    detail.append(row["rationale"].strip())
-                lines.append(f"  - {' · '.join(detail)}")
-            for risk in risks:
-                if risk["section"] != section:
-                    continue
-                written += 1
-                lines.append(f"- **C-{risk['id']}** {risk['body'].strip().splitlines()[0]}")
-                lines.append(f"  - {risk['answerer']}: {risk['answer'].strip().splitlines()[-1]}")
-            if not written:
-                lines.append("*Nothing yet.*")
+            for r in rows:
+                label = "" if r["kind"] in ("goal", "invariant", "brief") else f"({r['kind']}) "
+                lines.append(f"- **S-{r['id']}** {label}{r['text'].strip()}{mark(r)}")
+                for cid in measured.get(r["id"], []):
+                    c = db.statement(conn, cid)
+                    if c["status"] in live:
+                        lines.append(f"  - measured by **S-{c['id']}**: {c['text'].strip()}{mark(c)}")
             lines.append("")
 
-        text = "\n".join(lines)
+        for d in conn.execute("SELECT * FROM deliverables WHERE status = 'live' ORDER BY seq"):
+            lines += [f"## Deliverable {d['name']} (D-{d['id']})", ""]
+            rows = conn.execute(
+                """SELECT s.* FROM statements s JOIN statement_kinds k ON k.value = s.kind
+                    WHERE s.deliverable_id = ? AND s.status IN (?, ?) ORDER BY k.seq, s.id""",
+                (d["id"], *live)).fetchall()
+            for r in rows:
+                label = "Scope: " if r["kind"] == "scope" else f"({r['kind']}) "
+                lines.append(f"- **S-{r['id']}** {label}{r['text'].strip()}{mark(r)}")
+            if not rows:
+                lines.append("*No statements yet.*")
+            lines.append("")
+
+        kept = conn.execute("SELECT * FROM concerns WHERE acted_on = 'kept' ORDER BY id").fetchall()
+        lines += ["## Kept as is", ""]
+        for c in kept:
+            answer = conn.execute(
+                """SELECT w.body, g.name FROM answers w JOIN agents g ON g.id = w.answered_by
+                    WHERE w.concern_id = ? AND w.verdict IN ('accepted', 'final')
+                    ORDER BY w.id DESC LIMIT 1""", (c["id"],)).fetchone()
+            lines.append(f"- **C-{c['id']}** ({c['kind']}, on {db.about(c)}) {c['body'].strip()}")
+            if answer:
+                lines.append(f"  - {answer['name']}: {answer['body'].strip()}")
+        if not kept:
+            lines.append("*Nothing yet.*")
+        lines.append("")
+
+        retired = conn.execute("SELECT * FROM statements WHERE status NOT IN (?, ?) ORDER BY id",
+                               live).fetchall()
+        lines += ["## History", ""]
+        for r in retired:
+            by = [row["from_id"] for row in conn.execute(
+                "SELECT from_id FROM links WHERE to_id = ? AND relation = 'supersedes'", (r["id"],))]
+            reasons = [row["concern_id"] for row in conn.execute(
+                "SELECT concern_id FROM statement_reasons WHERE statement_id = ?", (r["id"],))]
+            fate = ("superseded by " + ", ".join(f"S-{b}" for b in by)) if by else r["status"]
+            why = sorted({row["concern_id"] for b in by for row in conn.execute(
+                "SELECT concern_id FROM statement_reasons WHERE statement_id = ?", (b,))})
+            if not by:
+                why = sorted({e["detail"] for e in conn.execute(
+                    "SELECT detail FROM events WHERE object = 'statement' AND object_id = ? "
+                    "AND to_status = ?", (r["id"], r["status"])) if e["detail"]})
+            because = (" because " + ", ".join(f"C-{c}" if isinstance(c, int) else c for c in why)
+                       if why else "")
+            lines.append(f"- **S-{r['id']}** ({r['kind']}) {r['text'].strip()} — {fate}{because}")
+            if reasons:
+                lines.append("  - it came from " + ", ".join(f"C-{c}" for c in reasons))
+        if not retired:
+            lines.append("*Nothing yet.*")
+
+        text = "\n".join(lines) + "\n"
         if args.out:
             Path(args.out).write_text(text)
             print(f"wrote {args.out}")
         else:
-            print(text)
+            print(text, end="")
         return 0
 
     return run(go)

@@ -20,9 +20,9 @@ failure is invisible in a requirements list.
 
 Work from the task, not the screen:
 
-- **Where does someone start?** Requirements usually assume the user has already arrived at
+- **Where does someone start?** Statements usually assume the user has already arrived at
   the right record. How did they find it? A tree of fifty thousand employees is not browsed,
-  it is searched — that changes the requirement.
+  it is searched — that changes the statement.
 - **How many steps does the common case take?** Name the single most frequent task and count
   the steps. If the rare case is cheaper than the common one, the design is inverted.
 - **What does the empty state say?** New account, no data, no results, no permission. These
@@ -35,12 +35,13 @@ Work from the task, not the screen:
   whether an accessibility standard applies — in many organizations one does, and that is a
   constraint, not a preference.
 
-Write behavior that can be tested:
+Write behavior that can be tested, proposed to Peter:
 
 ```
-cp-propose --from ux --kind functional --concern 33 \
-  --statement "The org tree opens on a search box; typing two characters lists matching people with their manager and office." \
-  --rationale "At 50,000 employees nobody browses from the CEO down; search is the real entry point."
+cp-concern --from ux --to pm --kind proposal --on S-33 \
+  --body "Proposed: the org tree opens on a search box; typing two characters lists matching
+          people with their manager and office. At 50,000 employees nobody browses from the
+          CEO down; search is the real entry point."
 ```
 
 ## Proportion
@@ -60,7 +61,7 @@ person genuinely cannot finish what they came to do.
 
 ## What to avoid
 
-- Redesigning the product when one requirement was unclear.
+- Redesigning the product when one statement was unclear.
 - Preferences stated as requirements. If you cannot test it, rewrite it.
 - Accessibility raised as a vague aspiration instead of a named standard and behavior.
 - Ignoring the human's own words about who uses this. They know their users; you know what

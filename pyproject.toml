@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "convergence-pipeline"
 version = "0.1.0"
-description = "Requirements convergence pipeline: concerns, answers and requirements in SQLite, driven by specialist agents"
+description = "Convergence pipeline: statements, approvals, concerns and answers in SQLite, driven by specialist agents"
 requires-python = ">=3.11"
 dependencies = [
   "pyyaml>=6.0",
@@ -13,25 +13,28 @@ dependencies = [
 
 [project.scripts]
 # Setup
-cp-init     = "convergence.cli:init_main"
-# A turn
-cp-queue    = "convergence.cli:queue_main"
-cp-concern  = "convergence.cli:concern_main"
-cp-answer   = "convergence.cli:answer_main"
-cp-review   = "convergence.cli:review_main"
-cp-propose  = "convergence.cli:propose_main"
-cp-decide   = "convergence.cli:decide_main"
-cp-staff    = "convergence.cli:staff_main"
-cp-signoff  = "convergence.cli:signoff_main"
-# Phase 3
+cp-init        = "convergence.cli:init_main"
+# Turns
+cp-turn        = "convergence.cli:turn_main"
+cp-queue       = "convergence.cli:queue_main"
+# Every agent
+cp-approve     = "convergence.cli:approve_main"
+cp-concern     = "convergence.cli:concern_main"
+cp-answer      = "convergence.cli:answer_main"
+cp-review      = "convergence.cli:review_main"
+cp-staff       = "convergence.cli:staff_main"
+# Peter
+cp-statement   = "convergence.cli:statement_main"
 cp-deliverable = "convergence.cli:deliverable_main"
 cp-milestone   = "convergence.cli:milestone_main"
+cp-escalate    = "convergence.cli:escalate_main"
+cp-report      = "convergence.cli:report_main"
 # Orchestration
-cp-state    = "convergence.cli:state_main"
-cp-round    = "convergence.cli:round_main"
-cp-render   = "convergence.cli:render_main"
-cp-policy   = "convergence.cli:policy_main"
-cp-doctor   = "convergence.cli:doctor_main"
+cp-state       = "convergence.cli:state_main"
+cp-round       = "convergence.cli:round_main"
+cp-render      = "convergence.cli:render_main"
+cp-policy      = "convergence.cli:policy_main"
+cp-doctor      = "convergence.cli:doctor_main"
 
 [tool.setuptools]
 packages = ["convergence"]

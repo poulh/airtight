@@ -14,8 +14,10 @@ The shared state is a SQLite database. Every requirement, approval, concern and 
 row, stamped with the round it happened in.
 
 > **Status (2026-09-27):** this document is the redesigned model, agreed in an interview with
-> the human; every design question is settled. The code in `convergence/`, `schema.sql` and
-> `pipeline.yaml` still implements the previous model and has not been rebuilt yet.
+> the human, and the code implements it. `docs/walkthrough.md` shows it working through the
+> real tools. Details the build settled that the text below does not spell out: Tina owns a
+> `milestone_proposals` duty so phase 3 puts milestone proposals in her queue; a concern is
+> never reassigned to its own raiser; Peter cannot end his turn with a report due.
 
 ---
 

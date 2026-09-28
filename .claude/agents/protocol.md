@@ -7,72 +7,67 @@ obstacle to work around.
 Set `CP_DB` to the project database, or pass `--db` to every tool. The tools are on `PATH`
 once `.venv` is active; otherwise call them as `.venv/bin/cp-queue`.
 
+## The objects
+
+- **Statements** (`S-12`) are the only thing everyone reads: goals, non-goals, success
+  criteria and invariants for the whole project, and per deliverable its scope and its
+  requirements. A statement is *agreed* once every approver has approved it, no concern on it
+  is open, and Peter has acted on every closed concern on it. Agreed statements are never
+  edited: a change retires the old one and writes new ones that link back.
+- **Concerns** (`C-4`) are private mail between two agents, always on one statement or one
+  milestone (`M-3`). Only the raiser closes a concern.
+- **Only Peter writes statements**, deliverables and milestones, and only from closed
+  concerns. If you want a statement added, reworded or cut, raise a `proposal` concern to
+  him saying exactly what, and why.
+
 ## A turn, in order
 
-1. **`cp-queue --agent <your-role>`** — concerns addressed to you, answers to your own
-   concerns awaiting your judgement, and every requirement change since you last looked.
-2. **Answer your mail.** `cp-answer --concern N --from <role> --kind ...`. Every concern
-   addressed to you gets an answer this turn.
-3. **Judge the answers to your concerns.** `cp-review --answer N --by <role> --satisfied
-   yes|no`. An accepted answer shows the wording of each requirement it names: judge that
-   wording, not the promise. Say yes when it is genuinely settled; a "no" needs `--reply`
-   saying what is missing. A requirement cannot be accepted while your concern is open.
-4. **Read the requirement changes.** Anything in your area that is wrong, missing or risky
-   becomes a concern (`cp-concern`) or a proposed requirement (`cp-propose`).
-5. **Sign off** with `cp-signoff --agent <role>` when you have nothing further to raise
-   against the current state and none of your own concerns is still open. A later change
-   puts you back to work; signing off is not leaving.
-6. **Close the turn** with `cp-queue --agent <role> --mark-seen`. This records that you have
-   read the requirement changes, and a new requirement cannot be accepted until every
-   active agent has.
+The orchestrator opens your turn. You work inside it; every tool refuses to act outside it.
 
-## Answering
-
-An answer is one of three shapes, and the tool refuses anything else:
-
-- `--kind accepted --requirements 12,14` — you agree and acted. Propose the requirement
-  first with `cp-propose`, then name its id here.
-- `--kind rejected --reason "..."` — you disagree and are changing nothing. Your reason is
-  published under *Accepted risks*, so write it for someone reading it in six months.
-- `--kind escalated --to pm|human` — you cannot settle it. Escalation moves the concern to
-  them; do not use it to avoid thinking.
+1. **`cp-queue --agent <your-role>`** — your last turn's summary, the statements in force, and
+   everything waiting on you.
+2. **Judge the answers to your concerns.** `cp-review --answer A-7 --by <role> --verdict
+   accepted` when it is genuinely settled, or `--verdict replied --reply "..."` saying what is
+   still missing. Accepting only closes the concern; Peter decides what, if anything, changes.
+3. **Answer the concerns addressed to you.** `cp-answer --concern C-4 --from <role> --body
+   "..."`, or hand it to someone better placed with `--reassign-to <role> --body "why"`. You
+   cannot answer again until the raiser has judged your last answer.
+4. **Review every statement you have not approved.** For each: `cp-approve --agent <role>
+   --statement S-12`, or raise a concern on it. You cannot approve a statement while your own
+   concern on it is open.
+5. **Retract, if you must.** Reading something new may show that a statement you approved is
+   wrong. `cp-approve --agent <role> --statement S-3 --retract --to <role> --body "why"`
+   withdraws your approval and raises the concern in one step.
+6. **Close the turn** with `cp-turn end --agent <role> --summary "..."`: one or two sentences,
+   in your own words, on what you did and why. The human reads these, and so will you at the
+   start of your next turn — you carry no memory between turns.
 
 ## Raising a concern
 
-`cp-concern --from <role> --to <role> --kind question|risk|objection|proposal --about R-12|C-3 --body "..."`
+`cp-concern --from <role> --to <role> --kind question|risk|objection|proposal --on S-12 --body "..."`
 
-- `--about` names what you read that prompted this: the requirement (`R-12`) or the concern
-  (`C-3`, often the brief) that made you think of it. It is required, so every concern
-  traces back to what the human said. An objection is simply a concern about a requirement.
 - One addressee. The same point for three agents is three concerns.
-- Address it to the agent who can actually settle it. If you do not know, address the PM.
-- Never address a concern to the human directly unless it is genuinely theirs to decide:
-  the goal, a cut to something they asked for, an invariant, or a cost only they can weigh.
-  The loop stops while they hold it.
-
-## Proposing a requirement
-
-`cp-propose --from <role> --kind functional|constraint|invariant --statement "..." --concern N`
-
-- One testable sentence. "The system is secure" is not a requirement; "Sessions expire after
-  30 minutes of inactivity" is.
-- `--concern N` links it to what prompted it, which is how anyone later learns why it exists.
-- `--supersedes N` rewords requirement N. The original stays in force until the new wording
-  is accepted.
-- `--rationale` carries the reasoning. Requirements outlive the conversation.
-- Only the architect sets `--cost`.
+- Address it to the agent who can actually settle it. If you do not know, address Peter.
+- Put it on the statement it is about. A concern about delivering a milestone goes on the
+  milestone (`--on M-3`).
+- A `proposal` says exactly what should change: the wording of the new statement, or which
+  statement should go and why. Peter writes it only if the argument holds.
+- Never address a concern to the human unless it is genuinely theirs to decide: a goal, a
+  non-goal, a success criterion, an invariant, or a cost only they can weigh. The loop stops
+  while they hold it.
 
 ## What you may not do
 
-- Decide requirements unless you are the PM (ordinary ones) or the human (goals, non-goals,
-  success criteria, invariants, and anything cutting what the human asked for).
-- Bring another agent into the project. Ask: `cp-staff request --agent <role> --by <role>
-  --about R-12 --reason "..." --cost "..."`. The human decides.
-- Write application code in phases 1–3. No code exists until phase 4.
-- Re-raise something already settled. Read the log first; `cp-queue` shows you the changes.
+- Write statements, deliverables or milestones, unless you are Peter.
+- Close someone else's concern, or answer one that is not addressed to you.
+- Bring another agent in. Ask: `cp-staff request --agent <role> --by <role> --on S-12
+  --reason "..." --cost "..."`. The human decides.
+- Write application code before phase 4.
+- Treat another agent's turn summary as information. Agents talk to each other only through
+  concerns.
 
-## If you disagree with a decision
+## If a thread goes round in circles
 
-Appeal once, and only when it matters: `cp-concern --from <role> --to human --kind appeal
---about R-12 --body "..."`. State the decision, why it is wrong, and what it costs if it stands. The PM
-does not hear appeals against his own rulings.
+Say so in your reply, plainly. Peter watches for stuck threads and can send one to the human
+early; past the limit in `cp-policy` it goes to the human on its own, with both positions.
+The human's answer comes back to the raiser like any other, unless they mark it final.
