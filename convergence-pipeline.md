@@ -206,6 +206,33 @@ asker's verdict.
 There is no Scribe. The report to the human is a printout of the tables, so Peter triggers it
 but cannot slant it, and "nobody reports on their own decisions" still holds.
 
+### Rounds and turns
+
+A round is sequential: every approver in roster order, then **Peter last**, so by his turn
+every concern closed that round is ready to act on together. An agent with an empty queue is
+recorded as a `skipped` turn. When the loop pauses, the human's actions (answering, saying
+continue) are recorded as a turn too, with the human as the agent, so the timeline has no gaps.
+
+```
+round 5:
+  T-41 tina
+  T-42 arty
+  T-43 quinn
+  T-44 ian      (skipped: empty queue)
+  T-45 peter    ← acts on everything closed this round
+  [every report_every_rounds rounds: report, paused until the human continues]
+```
+
+**Every action happens inside a recorded turn, and every row a tool writes carries its
+`turn_id` and `created_at`.** That is what lets a front end replay the project turn by turn
+without the tools preparing anything for it.
+
+Closing a turn requires a one- or two-sentence **summary** in the agent's own words, stored on
+the turn. Its readers are the human (the timeline, and each report gathers them) and the same
+agent at the start of its next turn, since agents carry no memory between turns. It is
+narration, never input: no tool decides anything from a summary, and other agents do not read
+them — agents talk to each other only through concerns.
+
 ### An agent's turn
 
 1. **Answers to my concerns** — accept, or reply.
@@ -350,14 +377,54 @@ CREATE TABLE answers (
 );
 
 CREATE TABLE events (                      -- every state change, for the report and history
-  id INTEGER PRIMARY KEY, round INTEGER NOT NULL, actor INTEGER NOT NULL,
+  id INTEGER PRIMARY KEY, turn_id INTEGER NOT NULL REFERENCES turns(id),
+  round INTEGER NOT NULL, actor INTEGER NOT NULL,
   object TEXT NOT NULL, object_id INTEGER NOT NULL,     -- statement | deliverable | concern
-  from_status TEXT, to_status TEXT, detail TEXT
+                                                        -- | milestone | agent | report
+  from_status TEXT, to_status TEXT, detail TEXT, created_at TEXT NOT NULL
+);
+
+CREATE TABLE turns (                       -- one per agent per round, skipped ones included
+  id         INTEGER PRIMARY KEY,          -- shown as T-43
+  round      INTEGER NOT NULL,
+  seq        INTEGER NOT NULL,             -- position within the round
+  phase      INTEGER NOT NULL,
+  agent_id   INTEGER NOT NULL REFERENCES agents(id),
+  status     TEXT NOT NULL,                -- running | done | skipped
+  summary    TEXT,                         -- required to close a turn that did anything
+  tokens     INTEGER,                      -- when Claude Code exposes it
+  started_at TEXT NOT NULL,
+  ended_at   TEXT
+);
+
+CREATE TABLE reports (
+  id           INTEGER PRIMARY KEY,        -- shown as P-2
+  round        INTEGER NOT NULL,
+  turn_id      INTEGER NOT NULL REFERENCES turns(id),
+  body         TEXT NOT NULL,              -- the generated report, as the human saw it
+  created_at   TEXT NOT NULL,
+  continued_at TEXT                        -- when the human said continue
+);
+
+CREATE TABLE project_state (               -- one row: what is happening right now
+  id              INTEGER PRIMARY KEY CHECK (id = 1),
+  round           INTEGER NOT NULL,
+  phase           INTEGER NOT NULL,
+  status          TEXT NOT NULL,           -- running | paused | converged | done
+  current_turn_id INTEGER REFERENCES turns(id),
+  paused_reason   TEXT,                    -- concern | report
+  paused_ref      INTEGER,                 -- the concern or report id
+  change_mark     INTEGER NOT NULL,        -- the latest event id
+  updated_at      TEXT NOT NULL
 );
 ```
 
-Kept from the previous design: `agents`, `agent_phases`, `agent_duties`, `policy`, `phases`,
-the vocabulary tables, `milestones`, `project_state` (round, phase, change mark).
+Every table a tool writes to — statements, links, statement_reasons, approvals, concerns,
+answers, deliverables, milestones — also carries `turn_id` and `created_at`; they are left out
+of the sketches above for brevity.
+
+Kept from the previous design: `agents` (plus a `seq` for turn order), `agent_phases`,
+`agent_duties`, `policy`, `phases`, the vocabulary tables and `milestones`.
 `agents.last_seen_change` still records how far each agent has read.
 
 ---
@@ -369,7 +436,8 @@ Agents never write SQL. The rules live in the tools and are read from `pipeline.
 | Tool | Who | What it does / refuses |
 |---|---|---|
 | `cp-init` | skill | Builds the database, records the brief as R-1 and creates D-1 |
-| `cp-queue` | anyone | The turn: answers to judge, concerns to answer, requirements to review (with goals and scope), and for Peter, requirements ready to act on, homeless requirements and stuck threads. `--mark-seen` |
+| `cp-turn` | skill | `start` opens the next agent's turn (or records it skipped); `end --summary` closes it. Every other writing tool refuses to act outside the caller's running turn |
+| `cp-queue` | anyone | The turn, starting with the agent's own last summary: answers to judge, concerns to answer, requirements to review (with goals and scope), and for Peter, requirements ready to act on, homeless requirements and stuck threads. `--mark-seen` |
 | `cp-approve` | approvers | Approve a requirement. `--retract` removes an approval and requires a concern body. Refuses while the agent's own concern on it is open |
 | `cp-concern` | anyone | Raise a concern on one requirement, to one agent. Refuses self-addressing, inactive agents, retired requirements |
 | `cp-answer` | the addressee | `answer`, or `reassign --to`. Refuses a second answer while one awaits a verdict. `--final` is the human's only |
@@ -380,7 +448,7 @@ Agents never write SQL. The rules live in the tools and are read from `pipeline.
 | `cp-staff` | anyone / human | Request an agent (a concern to the human on the triggering requirement); approve or decline |
 | `cp-state` | anyone | Round, phase, what it is paused on, requirements by status, whether phase 1 has converged |
 | `cp-round` | skill | `--advance` refuses while a concern is with the human; `--phase N` |
-| `cp-report` | Peter | The human's update: newly agreed, everything Peter changed and why, stuck and bouncing threads, staffing. **Pauses the loop** until the human continues it |
+| `cp-report` | Peter | Stored in `reports`. The human's update, including each agent's turn summaries since the last report: newly agreed, everything Peter changed and why, stuck and bouncing threads, staffing. **Pauses the loop** until the human continues it |
 | `cp-render` | anyone | `requirements.md`; later `milestone-N.md` |
 | `cp-policy` / `cp-doctor` | anyone | The rules in force; drift between config, charters, skill and database |
 
