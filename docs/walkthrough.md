@@ -8,12 +8,12 @@
 
 ```
 $ at-init --brief 'An employee hub where staff request leave and managers approve it.'
-created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpny2ihtn7/project.db
+created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpjid5xn46/project.db
   phases:       4
   policy:       3 settings
   vocabularies: 44 values across 12 tables
-  agents:       11 seeded, 2 active: The Human, Peter the Project Manager
-  D-1 'v1' and S-1 (the brief), written in T-1
+  agents:       11 seeded, 2 active: The Human, Peter (Project Manager)
+  D-1 (v1) and S-1 (the brief), written in T-1
   state:        round 1, phase 1
 ```
 
@@ -59,7 +59,7 @@ T-2 pm (round 1)
 
 ```
 $ at-concern --from pm --to human --kind question --on S-1 --body 'Who approves a request, and what happens if they never respond?'
-C-1 raised by Peter the Project Manager to The Human [question] on S-1
+C-1 (Who approves a request, and what…) raised by Peter (Project Manager) to The Human [question] on S-1 (An employee hub where staff request…)
 the loop pauses until the human answers
 ```
 
@@ -106,7 +106,7 @@ T-3 human
 
 ```
 $ at-answer --concern C-1 --from human --body 'The employee'"'"'s manager. Nobody should wait more than a week.'
-A-1 answers C-1 — with Peter the Project Manager for a verdict
+A-1 (The employee's manager. Nobody should wait…) answers C-1 (Who approves a request, and what…) — with Peter (Project Manager) for a verdict
 ```
 
 ```
@@ -165,52 +165,52 @@ T-4 pm (round 2)
 
 ```
 $ at-review --answer A-1 --by pm --verdict accepted
-A-1 accepted; C-1 closed — waiting for Peter to act on it
+A-1 (The employee's manager. Nobody should wait…) accepted; C-1 (Who approves a request, and what…) closed — waiting for Peter to act on it
 ```
 
 ```
 $ at-statement supersede --by pm --old S-1 --because C-1 --new '{"kind":"goal","text":"Staff always know where their leave request stands."}' --new '{"kind":"scope","deliverable":"D-1","text":"Requesting leave, and approving or declining it."}' --new '{"kind":"functional","deliverable":"D-1","text":"A manager approves or declines each leave request."}'
-S-1 superseded by S-2, S-3, S-4 — every approver reviews them
+S-1 (An employee hub where staff request…) superseded by S-2 (Staff always know where their leave…), S-3 (Requesting leave, and approving or declining…), S-4 (A manager approves or declines each…) — every approver reviews them
 ```
 
 ```
 $ at-statement add --by pm --kind success_criterion --measures S-2 --because C-1 --text 'No request waits more than 5 working days for a decision.'
-S-5 [success_criterion] written — every approver reviews it
+S-5 (No request waits more than 5…) [success_criterion] written — every approver reviews it
 ```
 
 ```
 $ at-approve --agent pm --statement S-2
-S-2 approved by Peter the Project Manager
+S-2 (Staff always know where their leave…) approved by Peter (Project Manager)
 ```
 
 ```
 $ at-approve --agent pm --statement S-3
-S-3 approved by Peter the Project Manager
+S-3 (Requesting leave, and approving or declining…) approved by Peter (Project Manager)
 ```
 
 ```
 $ at-approve --agent pm --statement S-4
-S-4 approved by Peter the Project Manager
+S-4 (A manager approves or declines each…) approved by Peter (Project Manager)
 ```
 
 ```
 $ at-approve --agent pm --statement S-5
-S-5 approved by Peter the Project Manager
+S-5 (No request waits more than 5…) approved by Peter (Project Manager)
 ```
 
 ```
 $ at-staff request --agent architect --by pm --on S-4 --reason 'approvals need a data model'
-C-2 staffing request for Arty the Architect -> The Human
+C-2 (Bring in Arty (Architect)? they argue…) staffing request for Arty (Architect) -> The Human
 ```
 
 ```
 $ at-staff request --agent qa --by pm --on S-4 --reason 'features are concrete'
-C-3 staffing request for Quinn the QA -> The Human
+C-3 (Bring in Quinn (QA)? they argue…) staffing request for Quinn (QA) -> The Human
 ```
 
 ```
 $ at-staff request --agent ux --by pm --on S-4 --reason 'managers act on requests in a UI'
-C-4 staffing request for Uma the UX -> The Human
+C-4 (Bring in Uma (UI/UX)? they argue…) staffing request for Uma (UI/UX) -> The Human
 ```
 
 ```
@@ -260,9 +260,9 @@ T-4 (pm) done
 | | id | S | kind | raised_by | addressed_to | status | closed | acted_on | body |
 |---|---|---|---|---|---|---|---|---|---|
 |  | 1 | 1 | question | pm | human | open → **closed** | · → **2** | · → **changed** | Who approves a request, and what happens if they never respond? |
-| 🆕 | 2 | 4 | staffing | pm | human | open | · | · | Bring in Arty the Architect?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-| 🆕 | 3 | 4 | staffing | pm | human | open | · | · | Bring in Quinn the QA?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-| 🆕 | 4 | 4 | staffing | pm | human | open | · | · | Bring in Uma the UX?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+| 🆕 | 2 | 4 | staffing | pm | human | open | · | · | Bring in Arty (Architect)?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+| 🆕 | 3 | 4 | staffing | pm | human | open | · | · | Bring in Quinn (QA)?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+| 🆕 | 4 | 4 | staffing | pm | human | open | · | · | Bring in Uma (UI/UX)?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
 
 **answers**
 
@@ -293,17 +293,17 @@ T-5 human
 
 ```
 $ at-staff approve --agent architect --concern C-2
-Arty the Architect: approved. C-2 closed — Peter acts on it
+Arty (Architect): approved. C-2 (Bring in Arty (Architect)? they argue…) closed — Peter acts on it
 ```
 
 ```
 $ at-staff approve --agent qa --concern C-3
-Quinn the QA: approved. C-3 closed — Peter acts on it
+Quinn (QA): approved. C-3 (Bring in Quinn (QA)? they argue…) closed — Peter acts on it
 ```
 
 ```
 $ at-staff approve --agent ux --concern C-4
-Uma the UX: approved. C-4 closed — Peter acts on it
+Uma (UI/UX): approved. C-4 (Bring in Uma (UI/UX)? they argue…) closed — Peter acts on it
 ```
 
 ```
@@ -323,17 +323,17 @@ T-5 (human) done
 
 | | id | S | kind | raised_by | addressed_to | status | closed | acted_on | body |
 |---|---|---|---|---|---|---|---|---|---|
-|  | 2 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Arty the Architect?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-|  | 3 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Quinn the QA?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-|  | 4 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Uma the UX?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 2 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Arty (Architect)?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 3 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Quinn (QA)?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 4 | 4 | staffing | pm | human | open → **closed** | · → **2** | · | Bring in Uma (UI/UX)?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
 
 **answers**
 
 | | id | C | answered_by | kind | verdict | reply | body |
 |---|---|---|---|---|---|---|---|
-| 🆕 | 2 | 2 | human | answer | final | · | Approved. Arty the Architect joins in round 2 and reviews every live statement. |
-| 🆕 | 3 | 3 | human | answer | final | · | Approved. Quinn the QA joins in round 2 and reviews every live statement. |
-| 🆕 | 4 | 4 | human | answer | final | · | Approved. Uma the UX joins in round 2 and reviews every live statement. |
+| 🆕 | 2 | 2 | human | answer | final | · | Approved. Arty (Architect) joins in round 2 and reviews every live statement. |
+| 🆕 | 3 | 3 | human | answer | final | · | Approved. Quinn (QA) joins in round 2 and reviews every live statement. |
+| 🆕 | 4 | 4 | human | answer | final | · | Approved. Uma (UI/UX) joins in round 2 and reviews every live statement. |
 
 **agents**
 
@@ -368,22 +368,22 @@ T-6 architect (round 2)
 
 ```
 $ at-approve --agent architect --statement S-2
-S-2 approved by Arty the Architect
+S-2 (Staff always know where their leave…) approved by Arty (Architect)
 ```
 
 ```
 $ at-approve --agent architect --statement S-3
-S-3 approved by Arty the Architect
+S-3 (Requesting leave, and approving or declining…) approved by Arty (Architect)
 ```
 
 ```
 $ at-approve --agent architect --statement S-5
-S-5 approved by Arty the Architect
+S-5 (No request waits more than 5…) approved by Arty (Architect)
 ```
 
 ```
 $ at-concern --from architect --to pm --kind question --on S-4 --body 'What happens if the manager does nothing for 5 working days?'
-C-5 raised by Arty the Architect to Peter the Project Manager [question] on S-4
+C-5 (What happens if the manager does…) raised by Arty (Architect) to Peter (Project Manager) [question] on S-4 (A manager approves or declines each…)
 ```
 
 ```
@@ -422,22 +422,22 @@ T-7 qa (round 2)
 
 ```
 $ at-approve --agent qa --statement S-2
-S-2 approved by Quinn the QA
+S-2 (Staff always know where their leave…) approved by Quinn (QA)
 ```
 
 ```
 $ at-approve --agent qa --statement S-3
-S-3 approved by Quinn the QA
+S-3 (Requesting leave, and approving or declining…) approved by Quinn (QA)
 ```
 
 ```
 $ at-approve --agent qa --statement S-5
-S-5 approved by Quinn the QA
+S-5 (No request waits more than 5…) approved by Quinn (QA)
 ```
 
 ```
 $ at-concern --from qa --to ux --kind question --on S-4 --body 'Can a manager approve from their phone?'
-C-6 raised by Quinn the QA to Uma the UX [question] on S-4
+C-6 (Can a manager approve from their…) raised by Quinn (QA) to Uma (UI/UX) [question] on S-4 (A manager approves or declines each…)
 ```
 
 ```
@@ -476,27 +476,27 @@ T-8 ux (round 2)
 
 ```
 $ at-approve --agent ux --statement S-2
-S-2 approved by Uma the UX
+S-2 (Staff always know where their leave…) approved by Uma (UI/UX)
 ```
 
 ```
 $ at-approve --agent ux --statement S-3
-S-3 approved by Uma the UX
+S-3 (Requesting leave, and approving or declining…) approved by Uma (UI/UX)
 ```
 
 ```
 $ at-approve --agent ux --statement S-4
-S-4 approved by Uma the UX
+S-4 (A manager approves or declines each…) approved by Uma (UI/UX)
 ```
 
 ```
 $ at-approve --agent ux --statement S-5
-S-5 approved by Uma the UX
+S-5 (No request waits more than 5…) approved by Uma (UI/UX)
 ```
 
 ```
 $ at-answer --concern C-6 --from ux --reassign-to architect --body 'Whether the approve screen works on a phone is an architecture call.'
-A-5 reassigns C-6 to Arty the Architect
+A-5 (Whether the approve screen works on…) reassigns C-6 (Can a manager approve from their…) to Arty (Architect)
 ```
 
 ```
@@ -572,7 +572,7 @@ T-9 architect (round 3)
 
 ```
 $ at-answer --concern C-6 --from architect --body 'Yes: the approve screen is responsive.'
-A-6 answers C-6 — with Quinn the QA for a verdict
+A-6 (Yes: the approve screen is responsive) answers C-6 (Can a manager approve from their…) — with Quinn (QA) for a verdict
 ```
 
 ```
@@ -603,7 +603,7 @@ T-10 qa (round 3)
 
 ```
 $ at-review --answer A-6 --by qa --verdict accepted
-A-6 accepted; C-6 closed — waiting for Peter to act on it
+A-6 (Yes: the approve screen is responsive) accepted; C-6 (Can a manager approve from their…) closed — waiting for Peter to act on it
 ```
 
 ```
@@ -641,12 +641,12 @@ T-12 pm (round 3)
 
 ```
 $ at-answer --concern C-5 --from pm --body 'It goes to the manager'"'"'s manager after 5 working days.'
-A-7 answers C-5 — with Arty the Architect for a verdict
+A-7 (It goes to the manager's manager…) answers C-5 (What happens if the manager does…) — with Arty (Architect) for a verdict
 ```
 
 ```
 $ at-statement keep --by pm --because C-2,C-3,C-4
-kept as is: C-2, C-3, C-4
+kept as is: C-2 (Bring in Arty (Architect)? they argue…), C-3 (Bring in Quinn (QA)? they argue…), C-4 (Bring in Uma (UI/UX)? they argue…)
 ```
 
 ```
@@ -658,9 +658,9 @@ T-12 (pm) done
 
 | | id | S | kind | raised_by | addressed_to | status | closed | acted_on | body |
 |---|---|---|---|---|---|---|---|---|---|
-|  | 2 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Arty the Architect?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-|  | 3 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Quinn the QA?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
-|  | 4 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Uma the UX?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 2 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Arty (Architect)?   they argue for: Will this hold together, and what must the first version not preclude?   trigger:        S-4: approvals need a data model   joins when:     a first feature list exists   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 3 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Quinn (QA)?   they argue for: What breaks it? Turns corner cases into statements, then tests.   trigger:        S-4: features are concrete   joins when:     features are concrete   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
+|  | 4 | 4 | staffing | pm | human | closed | 2 | · → **kept** | Bring in Uma (UI/UX)?   they argue for: Can a real person actually accomplish the task?   trigger:        S-4: managers act on requests in a UI   joins when:     the interface is more than a list or a form   cost:           more concerns, more rounds, more spend   or instead:     defer or drop S-4. |
 
 **answers**
 
@@ -708,12 +708,12 @@ T-13 architect (round 4)
 
 ```
 $ at-review --answer A-7 --by architect --verdict accepted
-A-7 accepted; C-5 closed — waiting for Peter to act on it
+A-7 (It goes to the manager's manager…) accepted; C-5 (What happens if the manager does…) closed — waiting for Peter to act on it
 ```
 
 ```
 $ at-approve --agent architect --statement S-4
-S-4 approved by Arty the Architect
+S-4 (A manager approves or declines each…) approved by Arty (Architect)
 ```
 
 ```
@@ -756,7 +756,7 @@ T-14 qa (round 4)
 
 ```
 $ at-approve --agent qa --statement S-4
-S-4 approved by Quinn the QA
+S-4 (A manager approves or declines each…) approved by Quinn (QA)
 ```
 
 ```
@@ -788,13 +788,13 @@ T-16 pm (round 4)
 
 ```
 $ at-queue --agent pm
-Peter the Project Manager — round 4, phase 1 (Converge)
+Peter (Project Manager) — round 4, phase 1 (Converge)
   you argue for: Does this still serve the goals? Interviews the human, is the only writer of statements, deliverables and milestones, and acts on settled concerns.
   your last turn (T-12): Answered Arty on escalation; kept the three staffing requests.
 
 IN FORCE (project-wide)
-  S-2 [goal, agreed] Staff always know where their leave request stands.
-  S-5 [success_criterion, agreed] No request waits more than 5 working days for a decision.
+  goal S-2 (agreed): Staff always know where their leave request stands.
+  success criterion S-5 (agreed): No request waits more than 5 working days for a decision.
 
 ANSWERS TO JUDGE (0) — at-review
 
@@ -803,10 +803,10 @@ CONCERNS TO ANSWER (0) — at-answer
 STATEMENTS TO REVIEW (0) — at-approve, or at-concern
 
 READY TO ACT ON (1) — at-statement, at-deliverable, at-milestone, or raise a new concern
-  S-4 [functional, D-1, pending] A manager approves or declines each leave request.
-       C-5 [question] from architect: What happens if the manager does nothing for 5 working days?
+  requirement S-4 (D-1, pending): A manager approves or declines each leave request.
+       C-5 (What happens if the manager does…) [question] from architect: What happens if the manager does nothing for 5 working days?
          ↳ pm (accepted): It goes to the manager's manager after 5 working days.
-       C-6 [question] from qa: Can a manager approve from their phone?
+       C-6 (Can a manager approve from their…) [question] from qa: Can a manager approve from their phone?
          ↳ architect (accepted): Yes: the approve screen is responsive.
 ```
 
@@ -832,22 +832,22 @@ refused: S-4 has closed concerns you have not considered: C-6 — cite them, or 
 
 ```
 $ at-statement keep --by pm --because C-6
-kept as is: C-6
+kept as is: C-6 (Can a manager approve from their…)
 ```
 
 ```
 $ at-statement supersede --by pm --old S-4 --because C-5 --new '{"text":"A manager approves or declines each leave request."}' --new '{"text":"A request with no decision after 5 working days goes to the manager'"'"'s manager."}'
-S-4 superseded by S-6, S-7 — every approver reviews them
+S-4 (A manager approves or declines each…) superseded by S-6 (A manager approves or declines each…), S-7 (A request with no decision after…) — every approver reviews them
 ```
 
 ```
 $ at-approve --agent pm --statement S-6
-S-6 approved by Peter the Project Manager
+S-6 (A manager approves or declines each…) approved by Peter (Project Manager)
 ```
 
 ```
 $ at-approve --agent pm --statement S-7
-S-7 approved by Peter the Project Manager
+S-7 (A request with no decision after…) approved by Peter (Project Manager)
 ```
 
 ```
@@ -930,12 +930,12 @@ T-17 architect (round 5)
 
 ```
 $ at-approve --agent architect --statement S-6
-S-6 approved by Arty the Architect
+S-6 (A manager approves or declines each…) approved by Arty (Architect)
 ```
 
 ```
 $ at-approve --agent architect --statement S-7
-S-7 approved by Arty the Architect
+S-7 (A request with no decision after…) approved by Arty (Architect)
 ```
 
 ```
@@ -967,12 +967,12 @@ T-18 qa (round 5)
 
 ```
 $ at-approve --agent qa --statement S-6
-S-6 approved by Quinn the QA
+S-6 (A manager approves or declines each…) approved by Quinn (QA)
 ```
 
 ```
 $ at-approve --agent qa --statement S-7
-S-7 approved by Quinn the QA
+S-7 (A request with no decision after…) approved by Quinn (QA)
 ```
 
 ```
@@ -1004,12 +1004,12 @@ T-19 ux (round 5)
 
 ```
 $ at-approve --agent ux --statement S-6
-S-6 approved by Uma the UX
+S-6 (A manager approves or declines each…) approved by Uma (UI/UX)
 ```
 
 ```
 $ at-approve --agent ux --statement S-7
-S-7 approved by Uma the UX
+S-7 (A request with no decision after…) approved by Uma (UI/UX)
 ```
 
 ```
@@ -1092,34 +1092,34 @@ round 5, phase 1 (Converge) — converged
 
 ## Kept as is
 
-- **C-2** (staffing, on S-4) Bring in Arty the Architect?
+- **C-2** (staffing, on requirement S-4 (A manager approves or declines each…)) Bring in Arty (Architect)?
   they argue for: Will this hold together, and what must the first version not preclude?
   trigger:        S-4: approvals need a data model
   joins when:     a first feature list exists
   cost:           more concerns, more rounds, more spend
-  or instead:     defer or drop S-4.
-  - The Human: Approved. Arty the Architect joins in round 2 and reviews every live statement.
-- **C-3** (staffing, on S-4) Bring in Quinn the QA?
+  or instead:     defer or drop S-4 (A manager approves or declines each…).
+  - The Human: Approved. Arty (Architect) joins in round 2 and reviews every live statement.
+- **C-3** (staffing, on requirement S-4) Bring in Quinn (QA)?
   they argue for: What breaks it? Turns corner cases into statements, then tests.
   trigger:        S-4: features are concrete
   joins when:     features are concrete
   cost:           more concerns, more rounds, more spend
   or instead:     defer or drop S-4.
-  - The Human: Approved. Quinn the QA joins in round 2 and reviews every live statement.
-- **C-4** (staffing, on S-4) Bring in Uma the UX?
+  - The Human: Approved. Quinn (QA) joins in round 2 and reviews every live statement.
+- **C-4** (staffing, on requirement S-4) Bring in Uma (UI/UX)?
   they argue for: Can a real person actually accomplish the task?
   trigger:        S-4: managers act on requests in a UI
   joins when:     the interface is more than a list or a form
   cost:           more concerns, more rounds, more spend
   or instead:     defer or drop S-4.
-  - The Human: Approved. Uma the UX joins in round 2 and reviews every live statement.
-- **C-6** (question, on S-4) Can a manager approve from their phone?
-  - Arty the Architect: Yes: the approve screen is responsive.
+  - The Human: Approved. Uma (UI/UX) joins in round 2 and reviews every live statement.
+- **C-6** (question, on requirement S-4) Can a manager approve from their phone?
+  - Arty (Architect): Yes: the approve screen is responsive.
 
 ## History
 
-- **S-1** (brief) An employee hub where staff request leave and managers approve it. — superseded by S-2, S-3, S-4 because C-1
-- **S-4** (functional) A manager approves or declines each leave request. — superseded by S-6, S-7 because C-5
-  - it came from C-1
+- **S-1** (brief) An employee hub where staff request leave and managers approve it. — superseded by S-2 (Staff always know where their leave…), S-3 (Requesting leave, and approving or declining…), S-4 because C-1 (Who approves a request, and what…)
+- **S-4** (functional) A manager approves or declines each leave request. — superseded by S-6 (A manager approves or declines each…), S-7 (A request with no decision after…) because C-5 (What happens if the manager does…)
+  - it came from C-1 (Who approves a request, and what…)
 ```
 

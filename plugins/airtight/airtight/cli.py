@@ -48,10 +48,10 @@ def finish(conn, turn):
     conn.commit()
 
 
-def show(row):
-    """One statement on one line: S-12 [functional, D-1, pending] text."""
-    where = f", D-{row['deliverable_id']}" if row["deliverable_id"] else ""
-    return f"S-{row['id']} [{row['kind']}{where}, {row['status']}] {row['text'].strip()}"
+def show(conn, row):
+    """One statement on one line: requirement S-12 (D-1, pending): text."""
+    where = f"D-{row['deliverable_id']}, " if row["deliverable_id"] else ""
+    return f"{db.label(conn, row)} ({where}{row['status']}): {row['text'].strip()}"
 
 
 def raise_concern(conn, turn, me, them, kind, body, statement_id=None, milestone_id=None):
@@ -208,7 +208,7 @@ def init_main():
     print(f"  vocabularies: {total_values} values across {len(cfg.VOCABULARIES)} tables")
     print(f"  agents:       {len(configuration['agents'])} seeded, {len(active)} active: "
           + ", ".join(active))
-    print(f"  D-1 '{args.deliverable}' and S-1 (the brief), written in T-{turn['id']}")
+    print(f"  D-1 ({args.deliverable}) and S-1 (the brief), written in T-{turn['id']}")
     print("  state:        round 1, phase 1")
     return 0
 
@@ -374,7 +374,7 @@ def queue_main():
 
         print("\nIN FORCE (project-wide)")
         for row in in_force:
-            print(f"  {show(row)}")
+            print(f"  {show(conn, row)}")
 
         print(f"\nANSWERS TO JUDGE ({len(q['verdicts'])}) — at-review")
         for row in q["verdicts"]:
@@ -385,7 +385,7 @@ def queue_main():
 
         print(f"\nCONCERNS TO ANSWER ({len(q['to_answer'])}) — at-answer")
         for row in q["to_answer"]:
-            print(f"  C-{row['id']} [{row['kind']}] on {db.about(row)} from {row['raiser_name']}")
+            print(f"  C-{row['id']} [{row['kind']}] on {db.about(conn, row)} from {row['raiser_name']}")
             print("       " + row["body"].strip().replace("\n", "\n       "))
             for t in thread(conn, row["id"]):
                 if t["kind"] == "reassign":
@@ -398,7 +398,7 @@ def queue_main():
         if me["approves"]:
             print(f"\nSTATEMENTS TO REVIEW ({len(q['to_review'])}) — at-approve, or at-concern")
             for row in q["to_review"]:
-                print(f"  {show(row)}")
+                print(f"  {show(conn, row)}")
                 if row["deliverable_id"]:
                     for scope in db.scope_of(conn, row["deliverable_id"]):
                         if scope["id"] != row["id"]:
@@ -409,7 +409,7 @@ def queue_main():
             print(f"\nREADY TO ACT ON ({len(q['ready'])}) — at-statement, at-deliverable, "
                   "at-milestone, or raise a new concern")
             for row in q["ready"]:
-                print(f"  {show(row)}")
+                print(f"  {show(conn, row)}")
                 for c in db.awaiting_peter(conn, row["id"]):
                     raiser = db.agent_by_id(conn, c["raised_by"])
                     body = c["body"].strip().replace("\n", "\n         ")
@@ -422,15 +422,15 @@ def queue_main():
                 print(f"\nHOMELESS ({len(q['homeless'])}) — their deliverable was split or "
                       "cancelled: at-statement move")
                 for row in q["homeless"]:
-                    print(f"  {show(row)}")
+                    print(f"  {show(conn, row)}")
             if q["orphans"]:
                 print(f"\nMISSING A LINK ({len(q['orphans'])}) — what they point at was retired")
                 for row in q["orphans"]:
-                    print(f"  {show(row)}")
+                    print(f"  {show(conn, row)}")
         if q["stuck"]:
             print(f"\nSTUCK ({len(q['stuck'])}) — at-escalate sends one to the human early")
             for row in q["stuck"]:
-                print(f"  C-{row['id']} on {db.about(row)}: {row['replies_since_reassign']} "
+                print(f"  C-{row['id']} on {db.about(conn, row)}: {row['replies_since_reassign']} "
                       f"replies since last reassigned")
         if q["report_due"]:
             print("\nREPORT DUE — at-report run")
@@ -1345,7 +1345,7 @@ def build_report(conn, report_no, since_turn):
     agreed = [db.statement(conn, sid) for sid in sorted(agreed)]
     agreed = [s for s in agreed if s["status"] == "agreed"]
     lines += ["", f"## Newly agreed ({len(agreed)})"]
-    lines += [f"- {show(s)}" for s in agreed] or ["- none"]
+    lines += [f"- {show(conn, s)}" for s in agreed] or ["- none"]
 
     writers = [a["id"] for a in db.who(conn, "statements", "owns")]
     changes = [e for e in since("statement", "(e.from_status IS NULL AND e.to_status = 'pending') "
@@ -1364,13 +1364,13 @@ def build_report(conn, report_no, since_turn):
         lines += ["", f"## Considered and kept as is ({len(kept)})"]
         for e in kept:
             c = db.concern(conn, e["object_id"])
-            lines.append(f"- C-{c['id']} on {db.about(c)}: {c['body'].strip()}")
+            lines.append(f"- C-{c['id']} on {db.about(conn, c)}: {c['body'].strip()}")
 
     waiting = conn.execute("SELECT * FROM concerns WHERE status = 'open' AND addressed_to = ?",
                            (HUMAN_ID,)).fetchall()
     if waiting:
         lines += ["", f"## Waiting for you ({len(waiting)})"]
-        lines += [f"- C-{c['id']} [{c['kind']}] on {db.about(c)}: {c['body'].strip()}"
+        lines += [f"- C-{c['id']} [{c['kind']}] on {db.about(conn, c)}: {c['body'].strip()}"
                   for c in waiting]
     stuck, bouncing = db.stuck(conn), db.bouncing(conn)
     if stuck or bouncing:
@@ -1836,7 +1836,7 @@ def render_main():
         if args.document == "milestone":
             if not args.milestone:
                 raise Refused("which milestone: --milestone M-3")
-            text = render_milestone(conn, db.parse_ref(args.milestone, "M")[1])
+            text = db.annotate(conn, render_milestone(conn, db.parse_ref(args.milestone, "M")[1]))
             if args.out:
                 Path(args.out).write_text(text)
                 print(f"wrote {args.out}")
@@ -1898,7 +1898,7 @@ def render_main():
                 """SELECT w.body, g.name FROM answers w JOIN agents g ON g.id = w.answered_by
                     WHERE w.concern_id = ? AND w.verdict IN ('accepted', 'final')
                     ORDER BY w.id DESC LIMIT 1""", (c["id"],)).fetchone()
-            lines.append(f"- **C-{c['id']}** ({c['kind']}, on {db.about(c)}) {c['body'].strip()}")
+            lines.append(f"- **C-{c['id']}** ({c['kind']}, on {db.about(conn, c)}) {c['body'].strip()}")
             if answer:
                 lines.append(f"  - {answer['name']}: {answer['body'].strip()}")
         if not kept:
@@ -1928,7 +1928,7 @@ def render_main():
         if not retired:
             lines.append("*Nothing yet.*")
 
-        text = "\n".join(lines) + "\n"
+        text = db.annotate(conn, "\n".join(lines) + "\n")
         if args.out:
             Path(args.out).write_text(text)
             print(f"wrote {args.out}")

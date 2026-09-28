@@ -48,6 +48,7 @@ CREATE TABLE duty_relations (
 CREATE TABLE statement_kinds (
   value            TEXT PRIMARY KEY,
   description      TEXT NOT NULL,
+  label            TEXT,            -- what the human calls it: "requirement", "goal"
   level            TEXT NOT NULL,   -- project | deliverable
   guarded_by       TEXT,            -- role whose answer a change must cite
   requires_link    TEXT,            -- link relation it must have when written

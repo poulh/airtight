@@ -11,6 +11,7 @@ for anything that changed.
 """
 
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -208,9 +209,59 @@ def is_live_deliverable(conn, row):
     return row["status"] in live_values(conn, "deliverable_statuses")
 
 
-def about(row):
-    """How a concern names what it is on: 'S-12' or 'M-3'."""
-    return f"S-{row['statement_id']}" if row["statement_id"] else f"M-{row['milestone_id']}"
+def label(conn, statement_row):
+    """What the human calls a statement's kind: 'requirement S-4', 'goal S-2'."""
+    try:
+        kind = conn.execute("SELECT label FROM statement_kinds WHERE value = ?",
+                            (statement_row["kind"],)).fetchone()
+    except sqlite3.OperationalError:   # a database built before kinds had labels
+        kind = None
+    name = (kind and kind["label"]) or statement_row["kind"].replace("_", " ")
+    return f"{name} S-{statement_row['id']}"
+
+
+# A bare id: not already inside "(S-7)" or "**S-7**", and not already followed by a
+# summary, a status bracket, a colon, or more of a word.
+BARE_ID = re.compile(r"(?<![\w(*-])([SCADM])-(\d+)\b(?!\s*\(|\*\*|\]|:|-|\w)")
+SUMMARY_SOURCES = {"S": ("statements", "text"), "C": ("concerns", "body"),
+                   "A": ("answers", "body"), "D": ("deliverables", "name"),
+                   "M": ("milestones", "name")}
+
+
+def summary(conn, prefix, row_id, words=6):
+    """The first few words of what an id refers to, or None."""
+    table, column = SUMMARY_SOURCES[prefix]
+    try:
+        row = conn.execute(f"SELECT {column} FROM {table} WHERE id = ?", (row_id,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or not row[0]:
+        return None
+    parts = row[0].split()
+    text = " ".join(parts[:words]).rstrip(".,;:")
+    return text + ("…" if len(parts) > words else "")
+
+
+def annotate(conn, text):
+    """Follow the first mention of each bare id with a short summary: S-7 (A request…)."""
+    seen = set()
+
+    def one(match):
+        key = match.group(0)
+        if key in seen:
+            return key
+        seen.add(key)
+        words = summary(conn, match.group(1), int(match.group(2)))
+        return f"{key} ({words})" if words else key
+
+    return BARE_ID.sub(one, text)
+
+
+def about(conn, row):
+    """How a concern names what it is on: 'requirement S-12' or 'milestone M-3'."""
+    if row["statement_id"]:
+        return label(conn, statement(conn, row["statement_id"]))
+    return f"milestone M-{row['milestone_id']}"
 
 
 # -------------------------------------------------------------------- turns

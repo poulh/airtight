@@ -25,7 +25,8 @@ HUMAN_ID = 1
 # vocabulary name -> the attribute columns its values carry, beyond
 # value/description/seq. These are the rules that belong to each value.
 VOCABULARIES = {
-    "statement_kinds": ["level", "guarded_by", "requires_link", "writable", "document_section"],
+    "statement_kinds": ["label", "level", "guarded_by", "requires_link", "writable",
+                        "document_section"],
     "statement_statuses": ["live"],
     "link_relations": ["from_kinds", "to_kinds"],
     "concern_kinds": ["must_address", "via_tool"],

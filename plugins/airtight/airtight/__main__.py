@@ -105,7 +105,11 @@ def main():
     entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
              **where(path), "tool": tool, "args": args}
 
-    out, err = Tee(sys.stdout), Tee(sys.stderr)
+    # Output is held until the tool finishes so every id can be followed by a short
+    # summary of what it is (S-7 (A request with…)). JSON output is left exactly as is.
+    readable = "--json" not in args
+    out, err = Tee(io.StringIO() if readable else sys.stdout), Tee(sys.stderr)
+    real_stdout = sys.stdout
     sys.stdout, sys.stderr = out, err
     code, crash = 0, None
     try:
@@ -117,7 +121,20 @@ def main():
         err.write(crash)
         code = 1
     finally:
-        sys.stdout, sys.stderr = out.stream, err.stream
+        sys.stdout, sys.stderr = real_stdout, err.stream
+
+    if readable:
+        text = out.copy.getvalue()
+        if path.exists() and text:
+            try:
+                conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                text = db.annotate(conn, text)
+                conn.close()
+            except sqlite3.Error:
+                pass
+        real_stdout.write(text)
+        out.copy = io.StringIO(text)
+        out.copy.seek(0, io.SEEK_END)
 
     printed = err.copy.getvalue()
     outcome = ("error" if crash else "ok" if code == 0

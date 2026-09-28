@@ -44,16 +44,33 @@ The loop pauses when the human owes an answer, or when Peter has run a report. O
 turn and gather everything waiting in one go: `at-turn start --agent human`, then
 `at-queue --agent human`.
 
-Put it to the user in one message, not one question at a time:
+**Put the items to the user one at a time.** Say how many there are ("1 of 3"), present the
+first, wait for their answer, record it, then move to the next. Never ask several things in
+one message: they would have to answer them all in one reply.
 
 - **a report** — show it as written, then ask whether to continue
-- **each concern addressed to them** — quote it, who raised it, and the statement it is on
+- **a concern addressed to them** — quote it, say who raised it, and what it is about
 - **a staffing request** — state the trigger and the cost, and say plainly they can approve
-  the agent, or answer that the statement should be deferred or dropped instead
+  the agent, or answer that the requirement should be deferred or dropped instead
 - **an invariant** — state both costs: deciding it now, and retrofitting it later
 - **a stuck thread** — both positions at equal length, from the thread
 
-Then write their answers back exactly as they gave them:
+**Speak their language.** "Statement" is the name of a table, not a word for the user. Call
+each thing by its kind, as `at-queue` labels it — the goal, a requirement, a success
+criterion, a non-goal, an invariant, the scope of v1, their brief — and say what it says
+rather than only its id: "requirement S-4, *a manager approves or declines each leave
+request*", not "S-4".
+
+**Every id gets a short summary in parentheses**, every time you write one: `S-7 (escalate
+after 5 working days)`, `C-4 (who approves leave?)`, `A-11 (yes, the screen is responsive)`,
+`M-3 (request and approve)`. The tools already add one after the first mention of each id in
+their output; keep them when you relay it, and add them in your own words.
+
+**Every agent gets their role in parentheses**: Peter (Project Manager), Tina
+(Time-to-Market), Arty (Architect), Quinn (QA), Ian (Security), Carla (Compliance), Otto
+(Ops), Uma (UI/UX), Dana (Developer), Rita (Code Review). The tools print them that way.
+
+After each answer, write it back exactly as they gave it:
 
 ```bash
 at-answer --concern C-4 --from human --body "<their words>"          # goes back to the raiser
