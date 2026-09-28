@@ -8,7 +8,7 @@
 
 ```
 $ at-init --brief 'An employee hub where staff request leave and managers approve it.'
-created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmppw524x3p/project.db
+created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpd9kmnjic/project.db
   phases:       4
   policy:       4 settings
   vocabularies: 44 values across 12 tables
@@ -810,6 +810,7 @@ T-16 pm (round 4)
 $ at-queue --agent pm
 Peter (Project Manager) — round 4, phase 1 (Converge)
   you argue for: Does this still serve the goals? Interviews the human, is the only writer of statements, deliverables and milestones, and acts on settled concerns.
+  your duties:   owns deliverables, owns escalation, owns interview, owns milestones, owns recruiting, owns reporting, owns statements
   your last turn (T-12): Answered Arty on escalation; kept the three staffing requests.
 
 ON THE PROJECT: The Human [human], Arty (Architect) [architect], Quinn (QA) [qa], Uma (UI/UX) [ux], Peter (Project Manager) [pm]

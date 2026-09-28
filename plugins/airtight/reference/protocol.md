@@ -24,6 +24,10 @@ once `.venv` is active; otherwise call them as `.venv/bin/at-queue`.
 
 The orchestrator opens your turn. You work inside it; every tool refuses to act outside it.
 
+**Every tool call costs a round trip that re-sends everything you have read**, so read the
+queue once, decide, and act in as few calls as the work allows: approve several statements
+in one call, and do not re-run `at-queue` to check your own work — each tool says what it did.
+
 1. **`at-queue --agent <your-role>`** — your last turn's summary, who is on the project, the
    statements in force, and everything waiting on you. Only address concerns to agents who
    are on the project.
@@ -33,15 +37,16 @@ The orchestrator opens your turn. You work inside it; every tool refuses to act 
 3. **Answer the concerns addressed to you.** `at-answer --concern C-4 --from <role> --body
    "..."`, or hand it to someone better placed with `--reassign-to <role> --body "why"`. You
    cannot answer again until the raiser has judged your last answer.
-4. **Review every statement you have not approved.** For each: `at-approve --agent <role>
-   --statement S-12`, or raise a concern on it. You cannot approve a statement while your own
-   concern on it is open.
+4. **Review every statement you have not approved.** Raise a concern on each one you cannot
+   accept, then approve all the rest in one call: `at-approve --agent <role> --statement
+   S-2,S-3,S-9`. You cannot approve a statement while your own concern on it is open.
 5. **Retract, if you must.** Reading something new may show that a statement you approved is
    wrong. `at-approve --agent <role> --statement S-3 --retract --to <role> --body "why"`
    withdraws your approval and raises the concern in one step.
 6. **Close the turn** with `at-turn end --agent <role> --summary "..."`: one or two sentences,
    in your own words, on what you did and why. The human reads these, and so will you at the
-   start of your next turn — you carry no memory between turns.
+   start of your next turn — you carry no memory between turns. Then reply to the
+   orchestrator with one line; the summary is already recorded.
 
 ## Raising a concern
 

@@ -13,24 +13,27 @@ root**: the tools find `.airtight/` there.
 
 ## The loop (every phase)
 
-Repeat:
+Your own context grows with every step and it lasts the whole session, so keep each step
+small: one command, and only what you need from its answer. Repeat:
 
-1. **`at-state --json`.** If `paused`, go to *The human's turn* and do not open agent turns
-   until it clears. If `converged` in phase 1, go to *Ending phase 1*.
-2. **`at-turn --json next`.** It opens the next agent's turn in the fixed order (Peter last),
-   and records agents with nothing to do as skipped.
-   - If it names an agent, run that agent's turn as a subagent (below), then go to 1.
-   - If the round is complete, `at-round --advance`, then go to 1. It refuses while the human
-     owes something or a report is due, which is the intended backstop.
-3. **Run the turn** with the subagent type `airtight:<role>` (`airtight:pm`,
+1. **`at-turn --json next`.** It opens the next agent's turn in the fixed order (Peter last),
+   records agents with nothing to do as skipped, and tells you what to do instead:
+   - **it names an agent** — run that turn (step 2), then repeat step 1;
+   - **the round is complete** — `at-round --advance`, then repeat step 1. If that refuses
+     because phase 1 has converged, go to *Ending phase 1*; if it refuses because a report is
+     due or the human owes something, the next `at-turn next` will say so;
+   - **it refuses: paused** — go to *The human's turn*;
+   - **it refuses: a turn is still running** — send that agent back to finish its own turn;
+     never end a turn on an agent's behalf.
+   You do not need `at-state` between turns; `at-turn next` refuses whenever the project
+   cannot move on. Use `at-state` when you need to tell the user where things stand.
+2. **Run the turn** with the subagent type `airtight:<role>` (`airtight:pm`,
    `airtight:architect`, …), one at a time, never in parallel, and give it exactly this:
 
    > Take your turn in airtight. Work from the project root: `<absolute path>`. The `at-*`
    > tools are on PATH. Your turn is already open. Start with `at-queue --agent <role>`,
-   > work through it, and finish with `at-turn end --agent <role> --summary "..."`.
-
-   When it returns, `at-state --json` must show no turn running. If one is, send the same
-   agent back to finish its own turn; never end a turn on an agent's behalf.
+   > work through it, and finish with `at-turn end --agent <role> --summary "..."`. Your
+   > summary is recorded; reply to me with one line only.
 
 Report to the user only a one-line round marker and whatever needs them. Do not narrate
 agent turns; the turns table and each report carry that.

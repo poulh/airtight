@@ -380,6 +380,9 @@ def queue_main():
 
         print(f"{me['name']} — round {st['round']}, phase {st['phase']} ({st['phase_name']})")
         print(f"  you argue for: {me['motivation'].strip()}")
+        duties = db.duties_of(conn, me["id"])
+        if duties:
+            print("  your duties:   " + ", ".join(f"{d['relation']} {d['duty']}" for d in duties))
         if q["last_summary"]:
             print(f"  your last turn (T-{q['last_summary']['id']}): "
                   f"{q['last_summary']['summary'].strip()}")
@@ -481,9 +484,10 @@ def queue_main():
 def approve_main():
     parser = base_parser("Approve a statement, or retract an approval with a concern")
     parser.add_argument("--agent", required=True)
-    parser.add_argument("--statement", required=True, help="S-12")
+    parser.add_argument("--statement", required=True,
+                        help="S-12, or several to approve in one call: S-2,S-3,S-9")
     parser.add_argument("--retract", action="store_true",
-                        help="withdraw your approval; needs --to and --body for the concern")
+                        help="withdraw your approval of one statement; needs --to and --body")
     parser.add_argument("--to", help="who the retraction's concern is addressed to")
     parser.add_argument("--kind", default="objection", help="the retraction concern's kind")
     parser.add_argument("--body", help="why you are retracting")
@@ -493,31 +497,40 @@ def approve_main():
         conn, me, turn = begin(args.db, args.agent, "approve")
         if not me["approves"]:
             raise Refused(f"{me['name']} does not approve statements")
-        row = db.statement(conn, db.parse_ref(args.statement, "S")[1])
-        if not db.is_live_statement(conn, row):
-            raise Refused(f"S-{row['id']} is {row['status']}")
-        mine = conn.execute("SELECT 1 FROM approvals WHERE statement_id = ? AND agent_id = ?",
-                            (row["id"], me["id"])).fetchone()
+        rows = [db.statement(conn, sid) for sid in db.ref_ids(args.statement, "S")]
+        if not rows:
+            raise Refused("name a statement: --statement S-12")
+        for row in rows:
+            if not db.is_live_statement(conn, row):
+                raise Refused(f"S-{row['id']} is {row['status']}")
 
         if not args.retract:
-            if row["deliverable_id"] and not db.is_live_deliverable(
-                    conn, db.deliverable(conn, row["deliverable_id"])):
-                raise Refused(f"S-{row['id']} is in a retired deliverable; Peter moves it first")
-            if mine:
-                raise Refused(f"you already approved S-{row['id']}")
-            own = conn.execute("SELECT id FROM concerns WHERE statement_id = ? AND raised_by = ? "
-                               "AND status = 'open'", (row["id"], me["id"])).fetchone()
-            if own:
-                raise Refused(f"your concern C-{own['id']} on S-{row['id']} is still open")
-            conn.execute("INSERT INTO approvals (statement_id, agent_id, round, turn_id, created_at) "
-                         "VALUES (?, ?, ?, ?, ?)",
-                         (row["id"], me["id"], turn["round"], turn["id"], db.now()))
-            db.record_event(conn, turn, "statement", row["id"], None, None,
-                            f"approved by {me['role']}")
+            # All or nothing: one refusal approves none, and names the statement to leave out.
+            for row in rows:
+                if row["deliverable_id"] and not db.is_live_deliverable(
+                        conn, db.deliverable(conn, row["deliverable_id"])):
+                    raise Refused(f"S-{row['id']} is in a retired deliverable; Peter moves it first")
+                if conn.execute("SELECT 1 FROM approvals WHERE statement_id = ? AND agent_id = ?",
+                                (row["id"], me["id"])).fetchone():
+                    raise Refused(f"you already approved S-{row['id']}")
+                own = conn.execute("SELECT id FROM concerns WHERE statement_id = ? AND raised_by = ? "
+                                   "AND status = 'open'", (row["id"], me["id"])).fetchone()
+                if own:
+                    raise Refused(f"your concern C-{own['id']} on S-{row['id']} is still open")
+                conn.execute("INSERT INTO approvals (statement_id, agent_id, round, turn_id, "
+                             "created_at) VALUES (?, ?, ?, ?, ?)",
+                             (row["id"], me["id"], turn["round"], turn["id"], db.now()))
+                db.record_event(conn, turn, "statement", row["id"], None, None,
+                                f"approved by {me['role']}")
             finish(conn, turn)
-            print(f"S-{row['id']} approved by {me['name']}")
+            print(", ".join(f"S-{r['id']}" for r in rows) + f" approved by {me['name']}")
             return 0
 
+        if len(rows) > 1:
+            raise Refused("retract one statement at a time, each with its own concern")
+        row = rows[0]
+        mine = conn.execute("SELECT 1 FROM approvals WHERE statement_id = ? AND agent_id = ?",
+                            (row["id"], me["id"])).fetchone()
         if not mine:
             raise Refused(f"you have not approved S-{row['id']}, so there is nothing to retract "
                           "— raise a concern instead")
