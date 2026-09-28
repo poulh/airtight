@@ -8,7 +8,7 @@
 
 ```
 $ at-init --brief 'An employee hub where staff request leave and managers approve it.'
-created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpcq_wqq4j/project.db
+created /var/folders/cw/lcqynjqx0_3_fhw7js17w2380000gn/T/tmpny2ihtn7/project.db
   phases:       4
   policy:       3 settings
   vocabularies: 44 values across 12 tables

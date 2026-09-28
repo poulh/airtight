@@ -44,6 +44,12 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
   goal guard, retraction, stall auto-escalation, early escalation, the human's final answer,
   deliverable splits and homeless statements, report pauses, and a milestone blocked by a
   statement change mid-build.
+- **Command log.** Every `at-*` call appends a line to `.airtight/log.jsonl` (next to the
+  database): time, round, turn, agent, tool, args, outcome (`ok`/`refused`/`usage`/`error`),
+  exit code and output, capped at 4000 characters. It is written by `airtight/__main__.py`
+  and is the place to look for refusals and crashes, which leave nothing in the database.
+  Claude Code's own transcripts (`~/.claude/projects/<repo path>/`) hold the orchestrator's
+  and agents' reasoning.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default

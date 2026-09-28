@@ -106,6 +106,14 @@ in it changes). The loop then runs Dana, Quinn and Rita through it until Dana me
 pauses for the user to try it and accept it — or raise a concern on it, which sends it back.
 Then ask which milestone is next.
 
+## When something goes wrong
+
+Every `at-*` call is appended to `.airtight/log.jsonl`: when, the round, turn and agent it ran
+in, the full command, how it ended (`ok`, `refused`, `usage`, `error`) and what it printed.
+Refusals and crashes leave nothing in the database, so this is where they show up. If an agent
+keeps hitting the same refusal, or a tool errors, stop and show the user the relevant lines
+rather than working around it.
+
 ## Rules you must not break
 
 - **Never answer for the human.** A paused loop is working correctly.

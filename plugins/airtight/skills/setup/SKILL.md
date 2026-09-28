@@ -31,7 +31,9 @@ failure to show it to the user.
      can be staffed, or `report_every_rounds`, the number of rounds between reports (each
      report pauses the loop, which is the spend brake). Run `at-init --check` after any edit.
    - `.airtight/` is meant to be committed: the database will record every statement, concern
-     and decision, and it should travel with the code.
+     and decision, and it should travel with the code. `.airtight/log.jsonl` records every
+     tool call, including refusals and errors — the first thing to look at if something goes
+     wrong.
    - When ready, `/airtight:start`.
 
 Do not create the database here; `/airtight:start` does that with the user's idea.
