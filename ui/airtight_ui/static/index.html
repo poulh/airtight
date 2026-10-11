@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Airtight Floor</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">a</span>
+      <div>
+        <div class="brand-name">airtight floor</div>
+        <div class="brand-db" id="db-path"></div>
+      </div>
+    </div>
+    <ol class="phases" id="phases" aria-label="Phases"></ol>
+    <div class="controls">
+      <span class="live" id="live"><span class="dot"></span><span id="live-text">connecting…</span></span>
+      <label class="refresh">
+        <input type="checkbox" id="auto" checked> auto
+        <select id="interval" aria-label="Refresh interval">
+          <option value="2">2s</option><option value="3">3s</option>
+          <option value="5">5s</option><option value="10">10s</option><option value="30">30s</option>
+        </select>
+      </label>
+      <button class="btn" id="refresh-now" title="Refresh now">↻</button>
+      <button class="btn" id="theme" title="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="kpis" id="kpis" aria-label="Project at a glance"></section>
+
+  <main class="layout">
+    <section class="floor-wrap" aria-label="The floor">
+      <div class="section-head">
+        <h2>The floor</h2>
+        <div class="round-strip" id="round-strip"></div>
+      </div>
+      <div class="floor" id="floor"></div>
+    </section>
+
+    <section class="panel" aria-label="Details">
+      <nav class="tabs" id="tabs" role="tablist">
+        <button role="tab" data-tab="statements">Statements</button>
+        <button role="tab" data-tab="concerns">Concerns</button>
+        <button role="tab" data-tab="agents">Agent stats</button>
+        <button role="tab" data-tab="timeline">Timeline</button>
+        <button role="tab" data-tab="log">Command log</button>
+      </nav>
+      <div class="tab-body" id="tab-body"></div>
+    </section>
+  </main>
+
+  <aside class="drawer" id="drawer" hidden>
+    <div class="drawer-head">
+      <div id="drawer-title"></div>
+      <button class="btn" id="drawer-close" title="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="tooltip" id="tooltip" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

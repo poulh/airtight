@@ -1,0 +1,21 @@
+# The airtight floor: a read-only dashboard over an airtight project's database.
+# ./setup.sh builds ui/.venv from this file; airtight-ui.toml configures it.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airtight-ui"
+version = "0.1.0"
+description = "A live, read-only view of an airtight project: rounds, turns, agents, statements and concerns."
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+airtight-ui = "airtight_ui.server:main"
+
+[tool.setuptools]
+packages = ["airtight_ui"]
+
+[tool.setuptools.package-data]
+airtight_ui = ["static/*"]

@@ -22,6 +22,8 @@ plugins/airtight/                 the plugin
   defaults/schema.sql             code, never copied
   airtight/                       the Python package (cli.py, db.py, config.py, __main__.py)
   bin/airtight, bin/at-*          on PATH while the plugin is enabled; each at-* is a stub
+ui/                               the airtight floor: read-only dashboard (FastAPI + plain JS),
+                                  its own pyproject.toml, airtight-ui.toml and ui/.venv
 SPEC.md, docs/, examples/, pyproject.toml, setup.sh   development only
 ```
 
@@ -50,6 +52,12 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
   and is the place to look for refusals and crashes, which leave nothing in the database.
   Claude Code's own transcripts (`~/.claude/projects/<repo path>/`) hold the orchestrator's
   and agents' reasoning.
+- **The floor** (`ui/`, 2026-10-11): a read-only web dashboard over a project database:
+  phase, round, the running turn, agent desks with queues and stats, statements, concern
+  threads, a who-raises-to-whom matrix, the timeline and the command log, polled every few
+  seconds. It imports `airtight.db` from the plugin for derived state rather than
+  reimplementing it. `ui/setup.sh`, then `ui/.venv/bin/airtight-ui` in the project. Not part
+  of the plugin yet.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default

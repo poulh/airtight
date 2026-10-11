@@ -1,0 +1,19 @@
+# airtight-ui configuration. Every key can be overridden on the command line
+# (airtight-ui --help). Relative paths resolve against the directory you run from.
+
+# The project database to watch. $AT_DB wins over this, --db over both.
+db = ".airtight/project.db"
+
+# The command log at-* tools append to. Empty: log.jsonl next to the database.
+log = ""
+
+# The airtight plugin, whose airtight.db helpers the server reuses so derived
+# state (rotation, queues, who must approve) is computed the same way the tools do.
+# Empty: ../plugins/airtight relative to this ui/ directory.
+plugin_root = ""
+
+host = "127.0.0.1"
+port = 8765
+
+# How often the page polls for changes.
+refresh_seconds = 3
