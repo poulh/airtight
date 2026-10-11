@@ -1,0 +1,25 @@
+# A backstop for the pre-commit hook: a change to the plugin must change its version,
+# or installed copies never update.
+name: plugin version
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: the plugin's version moved with its contents
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base to compare with"; exit 0
+          fi
+          python3 scripts/plugin_version.py check "$base"

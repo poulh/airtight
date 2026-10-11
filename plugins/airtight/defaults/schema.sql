@@ -11,6 +11,14 @@
 
 PRAGMA foreign_keys = ON;
 
+-- -------------------------------------------------------------------- meta
+
+-- Which plugin version built this database, and which last upgraded it (at-upgrade).
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,           -- plugin_version | created_with | upgraded_at
+  value TEXT NOT NULL
+);
+
 -- ------------------------------------------------------- phases and policy
 
 CREATE TABLE phases (

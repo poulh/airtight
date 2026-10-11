@@ -48,6 +48,63 @@ def fail(exc):
     return 2
 
 
+# ------------------------------------------------------------------ schema
+
+def schema_gaps(conn, schema_text):
+    """What schema.sql has that this database lacks: [(kind, table, column, sql)].
+
+    Only additions are found; nothing is ever dropped or retyped. A new table or index is
+    created from its own statement, a new column from its line in the CREATE TABLE.
+    """
+    ref = sqlite3.connect(":memory:")
+    ref.executescript(schema_text)
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    have_idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    gaps = []
+    for name, sql in ref.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY rowid"):
+        if name not in have:
+            gaps.append(("table", name, None, sql))
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({name})")}
+        for col in ref.execute(f"PRAGMA table_info({name})"):
+            if col[1] in cols:
+                continue
+            line = re.search(rf"^\s*{col[1]}\s+(.+?),?\s*(--.*)?$", sql, re.M)
+            gaps.append(("column", name, col[1], f"{col[1]} {line.group(1)}" if line
+                         else f"{col[1]} {col[2]}"))
+    for name, sql in ref.execute("SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                                 "AND sql IS NOT NULL"):
+        if name not in have_idx:
+            gaps.append(("index", name, None, sql))
+    ref.close()
+    return gaps
+
+
+def apply_schema_gaps(conn, gaps):
+    for kind, table, column, sql in gaps:
+        if kind == "column":
+            if "NOT NULL" in sql.upper() and "DEFAULT" not in sql.upper():
+                raise Refused(f"{table}.{column} is new and NOT NULL without a default — "
+                              "this upgrade needs a written migration")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {sql}")
+        else:
+            conn.execute(sql)
+
+
+def meta(conn, key, default=None):
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    except sqlite3.OperationalError:   # a database built before meta existed
+        return default
+    return row["value"] if row else default
+
+
+def set_meta(conn, key, value):
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+
+
 # ------------------------------------------------------------------ lookups
 
 def agent(conn, ident):
@@ -622,8 +679,8 @@ def milestone_duties(conn, me, phase):
          "try it, then at-milestone accept, or raise a concern on it"),
     ]
     if phase >= 3 and has_duty(conn, me["id"], "milestone_proposals", "owns"):
-        # A deliverable with agreed requirements that no milestone holds yet, and
-        # no proposal of this agent's still open on its scope.
+        # A deliverable with agreed requirements that no milestone holds yet, and no
+        # proposal of this agent's on its scope still open or still waiting for Peter.
         for d in conn.execute(
                 """SELECT d.* FROM deliverables d WHERE d.status = 'live' AND EXISTS (
                      SELECT 1 FROM statements s JOIN statement_kinds k ON k.value = s.kind
@@ -632,7 +689,8 @@ def milestone_duties(conn, me, phase):
                    AND NOT EXISTS (
                      SELECT 1 FROM concerns c JOIN statements s ON s.id = c.statement_id
                       WHERE s.deliverable_id = d.id AND s.kind = 'scope'
-                        AND c.raised_by = ? AND c.status = 'open')
+                        AND c.raised_by = ?
+                        AND (c.status = 'open' OR c.acted_on IS NULL))
                    ORDER BY d.seq""", (me["id"],)):
             scope = scope_of(conn, d["id"])
             on = f"S-{scope[0]['id']}" if scope else f"D-{d['id']}'s scope"

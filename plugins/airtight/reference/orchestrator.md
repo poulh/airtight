@@ -157,3 +157,4 @@ rather than working around it.
 
 - `${CLAUDE_PLUGIN_ROOT}/reference/protocol.md` — the shared turn protocol
 - `at-policy` — the rules in force; `at-<tool> --help` — every tool's arguments
+- `at-upgrade` — whether the project lags the installed plugin; `--apply`, with the user's yes

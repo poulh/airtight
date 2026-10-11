@@ -457,6 +457,7 @@ Agents never write SQL. The rules live in the tools and are read from `pipeline.
 | `at-report` | Peter | Stored in `reports`. The human's update, including each agent's turn summaries since the last report: newly agreed, everything Peter changed and why, stuck and bouncing threads, staffing. **Pauses the loop** until the human continues it |
 | `at-render` | anyone | `requirements.md`; later `milestone-N.md` |
 | `at-policy` / `at-doctor` | anyone | The rules in force; drift between config, charters, skill and database |
+| `at-upgrade` | skill | Brings a project up to the installed plugin: adds config entries and schema the plugin gained since the project was built, re-seeds the rules, keeps the project's own values, staffing and history |
 
 Removed: `at-propose`, `at-decide`, `at-signoff` (approvals replace sign-off).
 Milestones follow the one-writer rule too: Tina raises concerns proposing them, Peter writes

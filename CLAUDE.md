@@ -37,7 +37,7 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
 
 - **Packaged as the `airtight` plugin**, renamed from "convergence pipeline": tools `cp-*` →
   `at-*`, `CP_DB` → `AT_DB`, `.convergence/` → `.airtight/`. Both manifests pass
-  `claude plugin validate`. The schema, default config, 18 tools, ten charters, protocol and
+  `claude plugin validate`. The schema, default config, 19 tools, ten charters, protocol and
   three skills implement the spec; `at-doctor` reports no drift. Not yet installed through
   `/plugin` and exercised that way.
 - **Tested through the tools, phases 1–4.** `examples/walkthrough.py` regenerates
@@ -58,6 +58,9 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
   seconds. It imports `airtight.db` from the plugin for derived state rather than
   reimplementing it. `ui/setup.sh`, then `ui/.venv/bin/airtight-ui` in the project. Not part
   of the plugin yet.
+- **Versions and upgrades** (2026-10-11, 0.2.0): see *Shipping a change*. The database
+  records the version that built it in `meta`; databases from before 0.2.0 have no `meta`
+  and show as "before 0.2.0". `at-state` names the agent holding the running turn.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default
@@ -66,6 +69,21 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
 - GitHub: `poulh/airtight` (renamed from `convergence-pipeline`; the old URL redirects). The
   local directory is still `convergence-pipeline`, and `~/git/convergence-pipeline` is a
   symlink to it.
+
+## Shipping a change
+
+Claude Code caches an installed plugin **by version**: a change shipped under the same
+`version` in `plugins/airtight/.claude-plugin/plugin.json` never reaches anyone who has it
+installed (0.1.0 stayed installed for weeks this way). `./setup.sh` sets
+`core.hooksPath .githooks`, whose pre-commit hook (`scripts/plugin_version.py`) bumps the patch
+version whenever a commit changes the plugin; bump minor or major by hand. The
+`plugin version` GitHub workflow fails a push or PR that changes the plugin without moving it.
+
+A project then catches up with `at-upgrade`: each project has its own copy of the rules (its
+`pipeline.yaml` and the database seeded from it), so new rules reach it only that way.
+`/airtight:continue` checks on every resume, and `at-doctor` reports a project that lags. A
+schema change must be additive (new tables, nullable or defaulted columns) or come with a
+written migration in `at-upgrade`.
 
 ## The rule that governs the rest
 
@@ -134,6 +152,7 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 | `at-round` | skill | `--advance` (refuses mid-turn, paused, incomplete round, report due); `--phase N` (1→2 only once converged) |
 | `at-render` | anyone | `requirements`: goals with their criteria, per-deliverable statements, kept as is, history. `milestone --milestone M-3`: what to build, each statement's full trail of concerns back through what it replaced, context, invariants, what is not in it, open findings, done-when |
 | `at-policy` / `at-doctor` | anyone | The rules in force; drift between config, docs and database |
+| `at-upgrade` | skill | What the installed plugin added since the project was built; `--apply` merges new config entries into `.airtight/pipeline.yaml` (never changing the project's values), adds new tables and columns, re-seeds the rules, keeps staffing and history, backs both up to `.airtight/backup/` |
 
 ## Next steps
 

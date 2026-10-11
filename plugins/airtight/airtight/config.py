@@ -20,6 +20,15 @@ def config_path():
     """The project's own copy of pipeline.yaml once setup has made one, else the default."""
     return PROJECT_CONFIG if PROJECT_CONFIG.exists() else DEFAULT_CONFIG
 
+
+def plugin_version():
+    """The installed plugin's version, from its manifest."""
+    import json
+    try:
+        return json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+    except (OSError, ValueError, KeyError):
+        return "unknown"
+
 HUMAN_ID = 1
 
 # vocabulary name -> the attribute columns its values carry, beyond
@@ -89,6 +98,94 @@ def set_policy(path, key, value):
     entry = (f"  - key: {key}\n    value: {value}\n    description: >\n"
              f"      Added by airtight; see the plugin's default pipeline.yaml.\n")
     Path(path).write_text(text.replace("policy:\n", "policy:\n" + entry, 1))
+
+
+# ------------------------------------------------------------------ upgrades
+#
+# A project keeps its own copy of pipeline.yaml, so a newer plugin's rules never reach it
+# on their own. merge_defaults() brings in what the plugin added since the copy was made,
+# and never changes a value the project already has.
+
+IDENTITY = ("id", "number", "key", "value")
+
+
+def _identity(item):
+    if isinstance(item, dict):
+        for key in IDENTITY:
+            if key in item:
+                return key
+    return None
+
+
+def _label(path, item=None):
+    key = _identity(item) if item is not None else None
+    return f"{path}: {item[key]}" if key else path
+
+
+def _merge(project, default, path, added, new_duties):
+    if isinstance(project, dict) and isinstance(default, dict):
+        for key, value in default.items():
+            where = f"{path}.{key}" if path else key
+            if key not in project:
+                project[key] = value
+                added.append(where)
+            elif key in DUTY_RELATIONS and isinstance(value, list) and isinstance(project[key], list):
+                # A duty the plugin newly declared goes to whoever holds it by default; a duty
+                # the project already knew stays wherever the project put it.
+                for duty in value:
+                    if duty in new_duties and duty not in project[key]:
+                        project[key].append(duty)
+                        added.append(f"{where}: {duty}")
+            else:
+                _merge(project[key], value, where, added, new_duties)
+    elif isinstance(project, list) and isinstance(default, list):
+        key = next((_identity(d) for d in default if _identity(d)), None)
+        if key is None:
+            return
+        mine = {item.get(key): item for item in project if isinstance(item, dict)}
+        position = 0
+        for item in default:
+            ident = item.get(key) if isinstance(item, dict) else None
+            if ident in mine:
+                _merge(mine[ident], item, _label(path, item), added, new_duties)
+                position = project.index(mine[ident]) + 1
+            else:
+                # Keep the default's order: seq comes from position in the list.
+                project.insert(position, item)
+                position += 1
+                added.append(_label(path, item))
+
+
+def merge_defaults(project, default):
+    """The project's config with everything the default has and it lacks. Returns (merged, added)."""
+    import copy
+    merged = copy.deepcopy(project)
+    known = {d.get("value") for d in project.get("duties") or []}
+    new_duties = {d.get("value") for d in default.get("duties") or []} - known
+    added = []
+    _merge(merged, copy.deepcopy(default), "", added, new_duties)
+    return merged, added
+
+
+def dump(config, header):
+    """pipeline.yaml as text: block mappings, short lists inline, long text folded."""
+
+    class Dumper(yaml.SafeDumper):
+        pass
+
+    def text(dumper, value):
+        style = ">" if len(value) > 80 and "\n" not in value.rstrip("\n") else None
+        return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+    def seq(dumper, value):
+        flow = all(not isinstance(v, (dict, list)) for v in value)
+        return dumper.represent_sequence("tag:yaml.org,2002:seq", value, flow_style=flow)
+
+    Dumper.add_representer(str, text)
+    Dumper.add_representer(list, seq)
+    body = yaml.dump(config, Dumper=Dumper, sort_keys=False, allow_unicode=True, width=92,
+                     indent=2)
+    return header + body
 
 
 def tools():

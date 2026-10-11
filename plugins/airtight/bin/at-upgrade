@@ -1,0 +1,2 @@
+#!/bin/sh
+AIRTIGHT_TOOL=at-upgrade exec "$(dirname "$0")/airtight" "$@"

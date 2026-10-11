@@ -36,6 +36,7 @@ TOOLS = {
     "at-render": cli.render_main,
     "at-policy": cli.policy_main,
     "at-doctor": cli.doctor_main,
+    "at-upgrade": cli.upgrade_main,
 }
 
 OUTPUT_LIMIT = 4000   # characters of output kept per call

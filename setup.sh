@@ -6,5 +6,7 @@ cd "$(dirname "$0")"
 [ -d .venv ] || python3 -m venv .venv
 ./.venv/bin/pip install --quiet --upgrade pip
 ./.venv/bin/pip install --quiet -e .
+# The pre-commit hook bumps the plugin's version whenever a commit changes the plugin.
+git config core.hooksPath .githooks
 echo "ready. put the tools on PATH with:"
 echo "  export PATH=\"$PWD/plugins/airtight/bin:\$PATH\""

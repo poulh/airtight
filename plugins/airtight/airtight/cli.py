@@ -14,6 +14,7 @@ with that turn, and calls db.refresh() before committing so derived state
 import argparse
 import json
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -66,6 +67,70 @@ def raise_concern(conn, turn, me, them, kind, body, statement_id=None, milestone
     db.record_event(conn, turn, "concern", cur.lastrowid, None, "open",
                     f"{kind} on {on}, to {them['role']}")
     return cur.lastrowid
+
+
+# --------------------------------------------------------------------- seed
+
+def upsert(conn, table, key, row):
+    """Insert a rule row, or update it in place: rows that data refers to are never deleted."""
+    cols = list(row)
+    updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c != key) or f"{key} = {key}"
+    conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
+                 f"ON CONFLICT({key}) DO UPDATE SET {updates}", [row[c] for c in cols])
+
+
+def seed(conn, configuration):
+    """Write every rule in pipeline.yaml into the database. Used by at-init on an empty database
+    and by at-upgrade on a live one, so it only inserts and updates. An agent's staffing
+    (active, when it joined) belongs to the project, not the config, and is set only on insert.
+    Returns the number of vocabulary values."""
+    for p in configuration["phases"]:
+        upsert(conn, "phases", "number", {
+            "number": p["number"], "key": p["key"], "name": p["name"],
+            "ends_when": p["ends_when"].strip(), "needs": ",".join(p.get("needs") or []) or None})
+    for p in configuration["policy"]:
+        upsert(conn, "policy", "key", {"key": p["key"], "value": str(p["value"]),
+                                       "description": p["description"].strip()})
+    for name, table in cfg.SIMPLE_LISTS.items():
+        for seq, e in enumerate(configuration[name], start=1):
+            upsert(conn, table, "value", {"value": e["value"],
+                                          "description": e["description"].strip(), "seq": seq})
+    total_values = 0
+    for name, attrs in cfg.VOCABULARIES.items():
+        for seq, entry in enumerate(configuration["vocabularies"][name], start=1):
+            row = {"value": entry["value"], "description": entry["description"].strip()}
+            for attr in attrs:
+                raw = entry.get(attr)
+                row[attr] = (1 if raw else 0) if attr in cfg.BOOL_ATTRS else (
+                    raw.strip() if isinstance(raw, str) else raw)
+            row["seq"] = seq
+            upsert(conn, name, "value", row)
+            total_values += 1
+
+    for agent in configuration["agents"]:
+        rules = {"name": agent["name"], "role": agent["role"],
+                 "motivation": agent["motivation"].strip(), "charter": agent.get("charter"),
+                 "seq": agent["seq"], "approves": 1 if agent.get("approves") else 0,
+                 "joins_at_phase": agent["joins_at_phase"],
+                 "join_trigger": (agent.get("join_trigger") or "").strip() or None,
+                 "join_rationale": (agent.get("join_rationale") or "").strip() or None,
+                 "auto_staff": 1 if agent.get("auto_staff") else 0}
+        if conn.execute("SELECT 1 FROM agents WHERE id = ?", (agent["id"],)).fetchone():
+            conn.execute(f"UPDATE agents SET {', '.join(f'{c} = ?' for c in rules)} WHERE id = ?",
+                         [*rules.values(), agent["id"]])
+        else:
+            upsert(conn, "agents", "id", {"id": agent["id"], **rules,
+                                          "active": 1 if agent.get("active") else 0,
+                                          "joined_round": agent.get("joined_round")})
+        conn.execute("DELETE FROM agent_phases WHERE agent_id = ?", (agent["id"],))
+        conn.executemany("INSERT INTO agent_phases (agent_id, phase) VALUES (?, ?)",
+                         [(agent["id"], phase) for phase in agent["phases"]])
+        conn.execute("DELETE FROM agent_duties WHERE agent_id = ?", (agent["id"],))
+        for relation in cfg.DUTY_RELATIONS:
+            conn.executemany(
+                "INSERT INTO agent_duties (agent_id, duty, relation) VALUES (?, ?, ?)",
+                [(agent["id"], duty, relation) for duty in agent.get(relation) or []])
+    return total_values
 
 
 # --------------------------------------------------------------------- init
@@ -123,66 +188,9 @@ def init_main():
     conn = db.connect(str(path), must_exist=False)
     conn.executescript(Path(args.schema).read_text())
 
-    conn.executemany(
-        "INSERT INTO phases (number, key, name, ends_when, needs) VALUES (?, ?, ?, ?, ?)",
-        [(p["number"], p["key"], p["name"], p["ends_when"].strip(),
-          ",".join(p.get("needs") or []) or None)
-         for p in configuration["phases"]],
-    )
-    conn.executemany(
-        "INSERT INTO policy (key, value, description) VALUES (?, ?, ?)",
-        [(p["key"], str(p["value"]), p["description"].strip())
-         for p in configuration["policy"]],
-    )
-    for name, table in cfg.SIMPLE_LISTS.items():
-        conn.executemany(
-            f"INSERT INTO {table} (value, description, seq) VALUES (?, ?, ?)",
-            [(e["value"], e["description"].strip(), seq)
-             for seq, e in enumerate(configuration[name], start=1)],
-        )
-    total_values = 0
-    for name, attrs in cfg.VOCABULARIES.items():
-        columns = ["value", "description", *attrs, "seq"]
-        rows = []
-        for seq, entry in enumerate(configuration["vocabularies"][name], start=1):
-            values = [entry["value"], entry["description"].strip()]
-            for attr in attrs:
-                raw = entry.get(attr)
-                if attr in cfg.BOOL_ATTRS:
-                    values.append(1 if raw else 0)
-                else:
-                    values.append(raw.strip() if isinstance(raw, str) else raw)
-            values.append(seq)
-            rows.append(tuple(values))
-        conn.executemany(
-            f"INSERT INTO {name} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
-            rows)
-        total_values += len(rows)
-
-    for agent in configuration["agents"]:
-        conn.execute(
-            """INSERT INTO agents (id, name, role, motivation, charter, seq, approves,
-                                   joins_at_phase, join_trigger, join_rationale, auto_staff,
-                                   active, joined_round)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (agent["id"], agent["name"], agent["role"], agent["motivation"].strip(),
-             agent.get("charter"), agent["seq"], 1 if agent.get("approves") else 0,
-             agent["joins_at_phase"],
-             (agent.get("join_trigger") or "").strip() or None,
-             (agent.get("join_rationale") or "").strip() or None,
-             1 if agent.get("auto_staff") else 0,
-             1 if agent.get("active") else 0,
-             agent.get("joined_round")),
-        )
-        conn.executemany(
-            "INSERT INTO agent_phases (agent_id, phase) VALUES (?, ?)",
-            [(agent["id"], phase) for phase in agent["phases"]],
-        )
-        for relation in cfg.DUTY_RELATIONS:
-            conn.executemany(
-                "INSERT INTO agent_duties (agent_id, duty, relation) VALUES (?, ?, ?)",
-                [(agent["id"], duty, relation) for duty in agent.get(relation) or []],
-            )
+    total_values = seed(conn, configuration)
+    db.set_meta(conn, "plugin_version", cfg.plugin_version())
+    db.set_meta(conn, "created_with", cfg.plugin_version())
 
     stamp = db.now()
     conn.execute("INSERT INTO project_state (id, updated_at) VALUES (1, ?)", (stamp,))
@@ -1537,6 +1545,8 @@ def state_main():
             "status": st["status"], "paused": st["status"] == "paused",
             "paused_reason": st["paused_reason"], "paused_ref": st["paused_ref"],
             "current_turn": running["id"] if running else None,
+            "current_turn_agent": (db.agent_by_id(conn, running["agent_id"])["role"]
+                                   if running else None),
             "left_this_round": left, "report_due": db.report_due(conn),
             "statements": by_status, "open_concerns": open_count,
             "awaiting_peter": waiting_peter, "active": active,
@@ -1552,7 +1562,9 @@ def state_main():
             print(f"  paused on:    {what}-{st['paused_ref']} (the human's turn)")
         print(f"  ends when:    {st['ends_when'].strip()}")
         print(f"  active:       {', '.join(active)}")
-        print(f"  turn:         " + (f"T-{running['id']} running" if running else "none running"))
+        holder = db.agent_by_id(conn, running["agent_id"]) if running else None
+        print(f"  turn:         " + (f"T-{running['id']} running — {holder['name']} "
+                                     f"[{holder['role']}]" if running else "none running"))
         print(f"  left:         {', '.join(left) or 'nobody — at-round --advance'}")
         print("  statements:   " + (", ".join(f"{n} {s}" for s, n in by_status.items()) or "none"))
         print(f"  concerns:     {open_count} open, {waiting_peter} closed and waiting for Peter")
@@ -1712,6 +1724,85 @@ def policy_main():
     return run(go)
 
 
+
+
+# ------------------------------------------------------------------ upgrade
+
+def upgrade_main():
+    parser = base_parser("Bring a project up to the installed plugin: new config entries, "
+                         "new database columns and tables, and the rules re-seeded")
+    parser.add_argument("--config", help="the project's pipeline.yaml "
+                                         "(default: the one next to the database)")
+    parser.add_argument("--apply", action="store_true",
+                        help="make the changes; without it, only say what would change")
+    args = parser.parse_args()
+
+    def go():
+        path = Path(args.db)
+        if not path.exists():
+            raise Refused(f"no database at {path} — nothing to upgrade")
+        config_path = Path(args.config) if args.config else path.parent / "pipeline.yaml"
+        conn = db.connect(str(path))
+        built = db.meta(conn, "plugin_version", "before 0.2.0")
+        version = cfg.plugin_version()
+
+        project = cfg.load(config_path) if config_path.exists() else None
+        default = cfg.load(cfg.DEFAULT_CONFIG)
+        # A project without its own copy runs on the plugin's default, which is current by definition.
+        merged, added = cfg.merge_defaults(project, default) if project else (default, [])
+        problems = cfg.validate(merged)
+        if problems:
+            raise Refused(f"{config_path} would not be valid after merging the plugin's "
+                          "defaults: " + "; ".join(problems))
+        gaps = db.schema_gaps(conn, cfg.DEFAULT_SCHEMA.read_text())
+
+        print(f"project built with airtight {built}; the plugin is {version}")
+        print(f"  {config_path}: " + (f"{len(added)} addition(s)" if added else "up to date"
+                                      if project else "none — the plugin's default is used"))
+        for item in added:
+            print(f"    + {item}")
+        print(f"  {path}: " + (f"{len(gaps)} schema addition(s)" if gaps else "schema up to date"))
+        for kind, table, column, _ in gaps:
+            print(f"    + {kind} {table}{'.' + column if column else ''}")
+        print("  rules: re-seeded from the merged config (agents keep their staffing)")
+        if not args.apply:
+            print("\nnothing changed — at-upgrade --apply to make these changes")
+            return 0
+        if db.running_turn(conn):
+            raise Refused("a turn is still running — finish it first")
+
+        backups = path.parent / "backup"
+        backups.mkdir(exist_ok=True)
+        tag = built.replace(" ", "-")
+        if config_path.exists() and added:
+            (backups / f"pipeline.yaml.{tag}").write_text(config_path.read_text())
+        copy = sqlite3.connect(str(backups / f"project.db.{tag}"))
+        conn.backup(copy)
+        copy.close()
+
+        if added:
+            header = (f"# airtight pipeline.yaml for this project. Upgraded from {built} to "
+                      f"{version} by at-upgrade on {db.now()[:10]};\n"
+                      f"# the previous file is in {backups.name}/. Comments explaining each "
+                      "setting are in the plugin's\n# defaults/pipeline.yaml.\n\n")
+            config_path.write_text(cfg.dump(merged, header))
+        conn.execute("PRAGMA foreign_keys = OFF")   # new columns may reference other tables
+        db.apply_schema_gaps(conn, gaps)
+        conn.execute("PRAGMA foreign_keys = ON")
+        seed(conn, merged)
+        db.set_meta(conn, "plugin_version", version)
+        db.set_meta(conn, "upgraded_at", db.now())
+        db.record_event(conn, None, "project", 1, None, None,
+                        f"upgraded airtight {built} -> {version}: {len(added)} config "
+                        f"addition(s), {len(gaps)} schema addition(s)")
+        db.refresh(conn, None)
+        conn.commit()
+        print(f"\nupgraded to {version}; backups in {backups}")
+        return 0
+
+    return run(go)
+
+
 # ------------------------------------------------------------------- doctor
 
 # A threshold written into prose is a second copy of a policy value.
@@ -1791,12 +1882,12 @@ def doctor_main():
             try:
                 in_db = {r["value"] for r in db.vocab(conn, name)}
             except Exception:
-                findings.append(("database", f"{path} predates this schema — rebuild it"))
+                findings.append(("database", f"{path} predates this schema — at-upgrade"))
                 break
             in_yaml = {e["value"] for e in configuration["vocabularies"][name]}
             for value in sorted(in_yaml - in_db):
                 findings.append(("database", f"{name}: '{value}' is in pipeline.yaml but not in "
-                                             f"{path} — rebuild it"))
+                                             f"{path} — at-upgrade"))
             for value in sorted(in_db - in_yaml):
                 findings.append(("database", f"{name}: '{value}' is in {path} but not in "
                                              "pipeline.yaml"))
@@ -1808,6 +1899,24 @@ def doctor_main():
             where = "pipeline.yaml" if (role, duty, relation) in in_yaml else str(path)
             findings.append(("database", f"{role} {relation} {duty} is only in {where} "
                                          "— the database predates the config"))
+
+        # A project behind the installed plugin: tools and charters expect rules it lacks.
+        version, built = cfg.plugin_version(), db.meta(conn, "plugin_version", "before 0.2.0")
+        if built != version:
+            findings.append(("upgrade", f"{path} was built with airtight {built}; the plugin is "
+                                        f"{version} — at-upgrade"))
+        gaps = db.schema_gaps(conn, cfg.DEFAULT_SCHEMA.read_text())
+        if gaps:
+            findings.append(("upgrade", f"{path} lacks {len(gaps)} schema addition(s): "
+                             + ", ".join(f"{t}{'.' + c if c else ''}" for _, t, c, _ in gaps)
+                             + " — at-upgrade"))
+
+    if Path(args.config).resolve() != cfg.DEFAULT_CONFIG.resolve():
+        _, added = cfg.merge_defaults(configuration, cfg.load(cfg.DEFAULT_CONFIG))
+        if added:
+            findings.append(("upgrade", f"{args.config} lacks {len(added)} thing(s) the plugin "
+                             f"now has ({', '.join(added[:4])}{', …' if len(added) > 4 else ''})"
+                             " — at-upgrade"))
 
     if not findings:
         print("no drift found")

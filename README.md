@@ -34,6 +34,10 @@ What you end up with:
 /plugin install airtight@airtight
 ```
 
+To update later: `/plugin marketplace update airtight`, then reinstall. The next
+`/airtight:continue` in each project offers to bring that project up to the new version,
+keeping your settings and its history.
+
 ## Use
 
 In the repo for your project:

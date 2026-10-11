@@ -29,7 +29,9 @@ failure to show it to the user.
 3. **Copy the default config into the project**, with their answer:
    `at-init --scaffold --auto-staff yes` (automatic) or `--auto-staff no` (manual). It creates
    `.airtight/`, copies the default `pipeline.yaml` into it (never overwriting an existing
-   one), sets `auto_approve_staffing`, and validates it. That file is this project's own: the
+   one), sets `auto_approve_staffing`, and validates it. If the project already had one,
+   `at-upgrade` says whether this plugin version added anything to it since; offer
+   `at-upgrade --apply`. That file is this project's own: the
    roster, the thresholds, the kinds of statement, and every rule the tools enforce.
 
 4. **Check for drift**: `at-doctor`.
