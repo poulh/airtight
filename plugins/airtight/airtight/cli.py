@@ -1670,11 +1670,15 @@ def round_main():
             raise Refused(f"phase {st['phase']} ({st['phase_name']}) is done: "
                           f"{st['ends_when'].strip()} Show the user, and on their say-so "
                           f"at-round --phase {st['phase'] + 1}")
-        rotation = {a["id"] for a in db.rotation(conn)}
+        rotation = db.rotation(conn)
+        ids = {a["id"] for a in rotation}
         agent_statuses = {r["status"] for r in conn.execute(
             "SELECT agent_id, status FROM turns WHERE round = ?", (st["round"],))
-            if r["agent_id"] in rotation}
-        if agent_statuses == {"skipped"}:
+            if r["agent_id"] in ids}
+        # Stuck only if nobody has work now: the human may have acted since the agents were
+        # skipped (a concern on a milestone hands the developer work), and that must move on.
+        if agent_statuses == {"skipped"} and all(db.queue_is_empty(db.queue(conn, a))
+                                                for a in rotation):
             raise Refused(f"every agent was skipped in round {st['round']}, so another round "
                           f"would do nothing. Phase {st['phase']} still needs: "
                           + "; ".join(unmet or ["nothing the tools can see"])
