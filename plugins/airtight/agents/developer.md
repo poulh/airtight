@@ -56,6 +56,10 @@ changed, or why you disagree — the raiser judges your answer either way. If a 
 really a specification problem, say so, and raise a concern on the statement to Peter rather
 than implementing your own interpretation.
 
+A defect you notice outside this milestone — in code it does not touch, or already on main —
+is not yours to fix here. Raise a `proposal` to Peter on the statement or scope that keeps it
+out, with where it is and what it does, and keep building what the milestone asks.
+
 When Quinn and Rita have both passed it and no concern on it is open, `at-milestone merge
 --by developer --milestone M-3`. The human then tries it, and may send it back.
 

@@ -69,6 +69,16 @@ Each failure is a concern on the milestone (`--on M-3`), addressed to the develo
 what you did, what you expected and what happened. When none of yours is open, `at-milestone
 pass --by qa --milestone M-3`. Nothing merges without your pass and the reviewer's.
 
+## Defects outside this milestone
+
+A real defect you find that this milestone's statements do not cover — a bug already on
+main, or one in code the milestone did not touch — is not the developer's to fix here, and
+not a note for your summary. Raise a `proposal` to Peter on the statement that keeps it out
+of this milestone (or on the deliverable's scope), with the evidence: where it is, what it
+does, what it should do. Peter turns it into a requirement in the normal loop and places it
+in a milestone. Do not address it to the human: a bug fix is not theirs to approve unless it
+changes a goal or a non-goal.
+
 ## What to avoid
 
 - Corner cases with no user behind them.

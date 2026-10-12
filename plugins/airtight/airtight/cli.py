@@ -398,6 +398,9 @@ def queue_main():
                 "not_yet_on_the_project": [
                     {"role": a["role"], "name": a["name"], "joins_when": a["join_trigger"],
                      "joins_at_phase": a["joins_at_phase"]} for a in q["unstaffed"]],
+                "staff_for_next_phase": [
+                    {"role": a["role"], "name": a["name"], "needed_for": a["needed_for"],
+                     "joins_at_phase": a["joins_at_phase"]} for a in q["staff_for_next_phase"]],
                 "joins_next_phase": [
                     {"role": a["role"], "name": a["name"], "joins_when": a["join_trigger"],
                      "joins_at_phase": a["joins_at_phase"]} for a in q["unstaffed_later"]],
@@ -480,9 +483,15 @@ def queue_main():
                   "with the reason")
             for a in q["unstaffed"]:
                 print(f"  {a['name']} [{a['role']}] — joins when: {a['join_trigger'] or 'needed'}")
+        if q["staff_for_next_phase"]:
+            print(f"\nSTAFF NOW FOR PHASE {st['phase'] + 1} ({len(q['staff_for_next_phase'])}) — "
+                  "that phase cannot start without them and nobody on the project can stand in. "
+                  "Request them now, whatever their join trigger says: at-staff request, on the "
+                  "scope of the deliverable they will work on")
+            for a in q["staff_for_next_phase"]:
+                print(f"  {a['name']} [{a['role']}] — needed for: {', '.join(a['needed_for'])}")
         if q["unstaffed_later"]:
-            print(f"\nJOINS NEXT PHASE ({len(q['unstaffed_later'])}) — nothing to do yet; "
-                  "at-round --phase refuses to move on until they are on the project")
+            print(f"\nJOINS LATER ({len(q['unstaffed_later'])}) — nothing to do yet")
             for a in q["unstaffed_later"]:
                 print(f"  {a['name']} [{a['role']}] (phase {a['joins_at_phase']}) — joins when: "
                       f"{a['join_trigger'] or 'needed'}")
@@ -1628,7 +1637,9 @@ def round_main():
                 raise Refused(f"phase {args.phase} needs someone on the project for: " + "; ".join(
                     f"{duty} ({' or '.join(h['name'] for h in holders) or 'nobody in the roster'})"
                     for duty, holders in missing)
-                    + " — staff them first (at-staff approve in the human's turn)")
+                    + " — ask the user; on their yes, in their turn: "
+                    + "; ".join(f"at-staff approve --agent {h['role']}"
+                                for _, holders in missing for h in holders[:1]))
             conn.execute("UPDATE project_state SET phase = ?, updated_at = ? WHERE id = 1",
                          (args.phase, db.now()))
             db.record_event(conn, None, "project", 1, None, None,

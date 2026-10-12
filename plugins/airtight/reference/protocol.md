@@ -58,6 +58,9 @@ in one call, and do not re-run `at-queue` to check your own work — each tool s
   milestone (`--on M-3`).
 - A `proposal` says exactly what should change: the wording of the new statement, or which
   statement should go and why. Peter writes it only if the argument holds.
+- **A finding is a concern, never a note.** Anything you find that someone must act on —
+  a bug, a gap, a risk — goes into a concern addressed to whoever can act on it. Your turn
+  summary is narration: nobody acts on what is only written there.
 - Never address a concern to the human unless it is genuinely theirs to decide: a goal, a
   non-goal, a success criterion, an invariant, or a cost only they can weigh. The loop stops
   while they hold it.

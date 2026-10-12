@@ -66,6 +66,11 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
   taking empty turns; `db.phase_end()` checks each phase's end condition, shown by `at-state`
   and enforced by `at-round --advance`; turns record tokens via `at-turn tokens`, which the
   orchestrator runs after each subagent returns.
+  An agent the next phase needs (its `needs`) and nobody active can stand in for is real work
+  in Peter's queue (*staff now for phase N*), whatever its join trigger says: the reviewer's
+  trigger can only fire in phase 4, which deadlocked 3→4. Defects found outside a milestone
+  go to Peter as a `proposal` (protocol, QA, reviewer, developer and PM charters), not into a
+  summary or to the human.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default

@@ -688,7 +688,16 @@ def queue(conn, me):
     # counting them would give Peter a turn every round with nothing he is allowed to do.
     later = unstaffed(conn) if has_duty(conn, me["id"], "recruiting", "owns") else []
     q["unstaffed"] = [a for a in later if a["joins_at_phase"] <= st["phase"]]
-    q["unstaffed_later"] = [a for a in later if a["joins_at_phase"] > st["phase"]]
+    # Except one the next phase cannot start without: their join trigger may only ever fire
+    # in that phase (the reviewer's "a milestone is in review"), so waiting for it deadlocks.
+    needed = {}
+    for duty, holders in missing_for_phase(conn, st["phase"] + 1):
+        for h in holders:
+            needed.setdefault(h["id"], []).append(duty)
+    q["staff_for_next_phase"] = [dict(a, needed_for=needed[a["id"]]) for a in later
+                                 if a["joins_at_phase"] > st["phase"] and a["id"] in needed]
+    q["unstaffed_later"] = [a for a in later
+                            if a["joins_at_phase"] > st["phase"] and a["id"] not in needed]
     if has_duty(conn, me["id"], "escalation", "owns"):
         q["stuck"] = stuck(conn)
     if has_duty(conn, me["id"], "reporting", "owns"):
@@ -709,7 +718,7 @@ def queue(conn, me):
 def queue_is_empty(q):
     return not any(q[k] for k in ("verdicts", "to_answer", "to_review", "ready", "homeless",
                                   "orphans", "stuck", "report_due", "milestones", "reports",
-                                  "unstaffed"))
+                                  "unstaffed", "staff_for_next_phase"))
 
 
 def milestone_duties(conn, me, phase):

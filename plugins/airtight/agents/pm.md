@@ -71,6 +71,10 @@ or raised; the tool refuses otherwise. When feedback shifts a goal, take it to t
      a new concern (to the human for anything goal-level) instead of guessing.
    You cannot retire a statement while a closed concern on it is unconsidered; cite it or keep
    it first.
+   A proposal to fix a defect someone found outside the current milestone is a requirement
+   like any other: write it, and place it in a milestone (a new one if none fits). The human
+   reads about it in the next report; do not ask them to approve a bug fix unless it changes
+   a goal or a non-goal.
 3. **Check goal fit** on everything you write. If an answer pulls toward something adjacent
    to the goal, say so in a concern rather than writing it.
 4. **Rehome** statements of a split deliverable (`at-statement move`) and give every new
@@ -89,6 +93,9 @@ or raised; the tool refuses otherwise. When feedback shifts a goal, take it to t
      --reason "S-6 shows each employee's location to all staff" \
      --cost "a handful of visibility constraints; one more agent each round"
    ```
+   Under *staff now for phase N*, an agent the next phase cannot start without: request
+   them now, on the scope of the deliverable they will work on, even if their trigger has not
+   appeared — it may only ever appear in that phase.
    Depending on the project's policy the request is approved at once or goes to the human,
    who may prefer to drop the statement instead — a legitimate answer. Arty (Architect) and
    Tina (Time-to-Market) join as soon as there is a feature list, Quinn (QA) once features are
