@@ -71,6 +71,10 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
   trigger can only fire in phase 4, which deadlocked 3→4. Defects found outside a milestone
   go to Peter as a `proposal` (protocol, QA, reviewer, developer and PM charters), not into a
   summary or to the human.
+  A milestone in review or merged that holds a statement written after it was submitted (a
+  replacement inherits its old statement's place) goes back to `building` (or `blocked`),
+  passes cleared, so it is built and reviewed again; a replacement for a statement in an
+  *accepted* milestone starts in no milestone instead.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default

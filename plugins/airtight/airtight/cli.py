@@ -1017,7 +1017,10 @@ def statement_main():
         kinds = [db.term(conn, "statement_kinds", r["kind"], "kind") for r in olds]
         kinds += [db.term(conn, "statement_kinds", s.get("kind"), "statement kind") for s in specs]
         check_guard(conn, kinds, concerns)
-        milestone_id = next((r["milestone_id"] for r in olds if r["milestone_id"]), None)
+        # A replacement takes the old statement's place in its milestone, unless that milestone
+        # is accepted: delivered work is history, so the change waits for a new milestone.
+        milestone_id = next((r["milestone_id"] for r in olds if r["milestone_id"]
+                             and db.milestone(conn, r["milestone_id"])["status"] != "accepted"), None)
         new_ids = [write_statement(conn, turn, spec, concerns, milestone_id) for spec in specs]
         for row in olds:
             retire(conn, turn, row, "superseded",

@@ -470,7 +470,23 @@ def refresh(conn, turn):
         open_on_it = conn.execute(
             "SELECT 1 FROM concerns WHERE milestone_id = ? AND status = 'open'",
             (row["id"],)).fetchone()
-        if row["status"] == "building" and not_agreed:
+        # A statement written into it after the code was submitted (a replacement inherits its
+        # place) is not in that code: the milestone goes back to be built, and reviewed, again.
+        changed = []
+        if row["status"] in ("in_review", "merged"):
+            submitted = conn.execute(
+                """SELECT MAX(id) FROM events WHERE object = 'milestone' AND object_id = ?
+                     AND to_status = 'in_review'""", (row["id"],)).fetchone()[0] or 0
+            changed = [r["id"] for r in conn.execute(
+                f"""SELECT s.id FROM statements s WHERE s.milestone_id = ? AND s.status IN ({marks})
+                      AND (SELECT MIN(e.id) FROM events e WHERE e.object = 'statement'
+                             AND e.object_id = s.id) > ?""", (row["id"], *live, submitted))]
+        detail = None
+        if changed:
+            target = "blocked" if not_agreed else "building"
+            detail = (", ".join(f"S-{i}" for i in changed)
+                      + " changed after it was submitted — build it again")
+        elif row["status"] == "building" and not_agreed:
             target = "blocked"
         elif row["status"] == "blocked" and not not_agreed:
             target = "building"
@@ -478,11 +494,11 @@ def refresh(conn, turn):
             target = "building"   # the human's test found a bug
         if target != row["status"]:
             conn.execute("UPDATE milestones SET status = ? WHERE id = ?", (target, row["id"]))
-            if row["status"] == "merged":
+            if row["status"] in ("merged", "in_review"):
                 # Rework needs a fresh pass from both reviewers.
                 conn.execute("UPDATE milestones SET tested_ok_by = NULL, reviewed_ok_by = NULL "
                              "WHERE id = ?", (row["id"],))
-            record_event(conn, turn, "milestone", row["id"], row["status"], target)
+            record_event(conn, turn, "milestone", row["id"], row["status"], target, detail)
 
     st = state(conn)
     status, reason, ref = "running", None, None
