@@ -9,9 +9,11 @@ const store = {
 
 const ui = {
   tab: new URLSearchParams(location.search).get("tab") || store.get("tab", "statements"),
-  stFilter: store.get("stFilter", "live"),
+  stStatus: new Set(store.get("stStatus", "pending,agreed").split(",").filter(Boolean)),
+  stKinds: new Set(store.get("stKinds", "").split(",").filter(Boolean)),
   stConcernsOnly: store.get("stConcernsOnly", "0") === "1",
   cFilter: store.get("cFilter", "open"),
+  cKinds: new Set(store.get("cKinds", "").split(",").filter(Boolean)),
   cAgent: store.get("cAgent", ""),
   drawer: null,            // {type, id}
   auto: store.get("auto", "1") === "1",
@@ -27,12 +29,17 @@ function h(value) {
 }
 // Escaped text with S-n and C-n turned into links that open the drawer.
 function linked(text) {
-  return h(text).replace(/\b([SC])-(\d+)\b/g, (m, p, n) =>
-    `<button class="ref" data-open="${p === "S" ? "statement" : "concern"}" data-id="${n}">${m}</button>`);
+  const kinds = { S: "statement", C: "concern", M: "milestone" };
+  return h(text).replace(/\b([SCM])-(\d+)\b/g, (m, p, n) =>
+    `<button class="ref" data-open="${kinds[p]}" data-id="${n}">${m}</button>`);
 }
 const agentsById = () => Object.fromEntries((data?.agents || []).map((a) => [a.id, a]));
-function shortName(a) { return a ? a.name.split(" (")[0] : "—"; }
-function title(a) { const m = a?.name.match(/\((.*)\)/); return m ? m[1] : a?.role || ""; }
+// Rosters name agents "Peter (Project Manager)" or "Peter the Project Manager".
+function shortName(a) { return a ? a.name.split(/ \(| the /)[0] : "—"; }
+function title(a) {
+  const m = a?.name.match(/\((.*)\)| the (.*)$/);
+  return m ? (m[1] || m[2]) : a?.role || "";
+}
 function initials(a) { return shortName(a).slice(0, 1).toUpperCase(); }
 function who(id) { return shortName(agentsById()[id]); }
 function plural(n, word, many) { return `${n} ${n === 1 ? word : many || word + "s"}`; }
@@ -45,6 +52,18 @@ function ago(iso) {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
+function tokens(n) {
+  if (!n) return "0";
+  return n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : String(n);
+}
+// An estimated cost when a rate is configured, else null: the database only records tokens.
+function cost(n) {
+  const rate = data?.state.cost_per_million_tokens;
+  if (!rate || !n) return null;
+  const usd = (n / 1e6) * rate;
+  return usd >= 100 ? `$${usd.toFixed(0)}` : `$${usd.toFixed(2)}`;
+}
+function spend(n) { const c = cost(n); return c ? `${c} · ${tokens(n)} tokens` : `${tokens(n)} tokens`; }
 function time(iso) { return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : ""; }
 
 const AGENT_TONE = {
@@ -170,8 +189,12 @@ function renderKpis() {
     ["Statements", live, `${by.agreed || 0} agreed · ${by.pending || 0} pending`],
     ["Open concerns", st.open_concerns, st.stuck.length ? `${st.stuck.length} near the stall limit` : `${data.concerns.length} raised in all`],
     ["Awaiting Peter", st.awaiting_peter, "closed, not yet acted on"],
-    ["Turns taken", st.turns_total, st.tokens_total ? `${st.tokens_total.toLocaleString()} tokens` : `change mark ${st.change_mark}`],
-    ["Deliverables", liveDeliverables, `${data.milestones.length} milestones`],
+    ["Turns taken", st.turns_total, `change mark ${st.change_mark}`],
+    st.turns_with_tokens
+      ? [cost(st.tokens_total) ? "Est. cost" : "Tokens", cost(st.tokens_total) || tokens(st.tokens_total),
+         `${cost(st.tokens_total) ? tokens(st.tokens_total) + " tokens · " : ""}${st.turns_with_tokens} of ${st.turns_total} turns recorded`]
+      : ["Tokens", "—", "not recorded yet"],
+    ["Milestones", data.milestones.length, `${data.milestones.filter((m) => m.status === "accepted").length} accepted · ${liveDeliverables} deliverable(s)`],
   ];
   $("#kpis").innerHTML = tiles.map(([label, value, sub]) =>
     `<div class="kpi"><div class="label">${h(label)}</div><div class="value">${h(value)}</div><div class="sub">${h(sub)}</div></div>`).join("");
@@ -242,7 +265,7 @@ function renderFloor() {
 function renderTab() {
   for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === ui.tab));
   const body = $("#tab-body"), scroll = body.scrollTop;
-  const fn = { statements: tabStatements, concerns: tabConcerns, agents: tabAgents, timeline: tabTimeline, log: tabLog }[ui.tab];
+  const fn = { statements: tabStatements, concerns: tabConcerns, milestones: tabMilestones, agents: tabAgents, timeline: tabTimeline, log: tabLog }[ui.tab];
   body.innerHTML = data ? fn() : "";
   body.scrollTop = scroll;
 }
@@ -250,6 +273,13 @@ function renderTab() {
 function seg(name, options, current) {
   return `<span class="seg">${options.map(([v, label]) =>
     `<button data-filter="${name}" data-value="${h(v)}" class="${v === current ? "on" : ""}">${h(label)}</button>`).join("")}</span>`;
+}
+
+// A multi-select filter: nothing selected means everything.
+function chips(name, options, selected) {
+  return `<span class="chipset" role="group">${options.map(([v, label, n]) =>
+    `<button data-chip="${name}" data-value="${h(v)}" class="fchip ${selected.has(v) ? "on" : ""}" aria-pressed="${selected.has(v)}">${h(label)} <span class="n">${n}</span></button>`).join("")}
+    ${selected.size ? `<button data-chip="${name}" data-value="" class="fchip clear">clear</button>` : ""}</span>`;
 }
 
 function statementRow(s, child) {
@@ -280,10 +310,16 @@ function statementRow(s, child) {
 
 function tabStatements() {
   const live = (s) => s.status === "pending" || s.status === "agreed";
-  let list = data.statements.filter((s) => ui.stFilter === "all" || live(s));
+  const count = (pred) => data.statements.filter(pred).length;
+  const kindLabel = Object.fromEntries(data.vocab.statement_kinds.map((k) => [k.value, k.label || k.value.replace("_", " ")]));
+  const statusRow = chips("stStatus", data.vocab.statement_statuses.map((v) => [v.value, v.value, count((s) => s.status === v.value)]), ui.stStatus);
+  const kindRow = chips("stKinds", data.vocab.statement_kinds.filter((k) => count((s) => s.kind === k.value))
+    .map((k) => [k.value, kindLabel[k.value], count((s) => s.kind === k.value)]), ui.stKinds);
+  let list = data.statements.filter((s) => (!ui.stStatus.size || ui.stStatus.has(s.status)) && (!ui.stKinds.size || ui.stKinds.has(s.kind)));
   if (ui.stConcernsOnly) list = list.filter((s) => s.concerns.total);
-  const filters = `<div class="filters">${seg("stFilter", [["live", "In force"], ["all", "All, with history"]], ui.stFilter)}
-    ${seg("stConcernsOnly", [["0", "Any"], ["1", "With concerns"]], ui.stConcernsOnly ? "1" : "0")}
+  const filters = `<div class="filters"><span class="flabel">status</span>${statusRow}</div>
+    <div class="filters"><span class="flabel">kind</span>${kindRow}</div>
+    <div class="filters">${seg("stConcernsOnly", [["0", "Any"], ["1", "With concerns"]], ui.stConcernsOnly ? "1" : "0")}
     <span class="muted">${plural(list.length, "statement")}</span></div>`;
   if (!list.length) return filters + `<div class="empty-state">No statements match.</div>`;
 
@@ -293,11 +329,10 @@ function tabStatements() {
   // Goals with the criteria that measure them nested underneath.
   const measures = {};
   for (const s of list) for (const l of s.links_out) if (l.relation === "measures") (measures[l.id] ||= []).push(s);
-  const nested = new Set(Object.values(measures).flat().map((s) => s.id));
   if (project.length) {
     out.push(`<div class="group-title">Project-wide <span class="muted">goals, criteria, invariants</span></div>`);
     for (const s of project) {
-      if (nested.has(s.id) && [...s.links_out].some((l) => l.relation === "measures" && shown.has(l.id))) continue;
+      if (s.links_out.some((l) => l.relation === "measures" && shown.has(l.id))) continue;
       out.push(statementRow(s));
       for (const m of measures[s.id] || []) out.push(statementRow(m, true));
     }
@@ -340,27 +375,70 @@ function tabConcerns() {
     all: () => true,
   }[ui.cFilter] || (() => true);
   const agent = Number(ui.cAgent) || 0;
-  const list = data.concerns.filter(match).filter((c) => !agent || [c.raised_by, c.raised_to, c.addressed_to].includes(agent)).reverse();
+  const list = data.concerns.filter(match).filter((c) => !agent || [c.raised_by, c.raised_to, c.addressed_to].includes(agent))
+    .filter((c) => !ui.cKinds.size || ui.cKinds.has(c.kind)).reverse();
+  const kindCount = (k) => data.concerns.filter(match).filter((c) => c.kind === k).length;
+  const kindRow = chips("cKinds", data.vocab.concern_kinds.filter((k) => data.concerns.some((c) => c.kind === k.value))
+    .map((k) => [k.value, k.value, kindCount(k.value)]), ui.cKinds);
   const options = [`<option value="">everyone</option>`, ...data.agents.filter((a) => a.stats.concerns_raised || a.stats.concerns_received)
     .map((a) => `<option value="${a.id}" ${a.id === agent ? "selected" : ""}>${h(shortName(a))}</option>`)].join("");
   const counts = { open: data.concerns.filter((c) => c.status === "open").length, peter: data.state.awaiting_peter };
   const filters = `<div class="filters">${seg("cFilter", [["open", `Open (${counts.open})`], ["peter", `Awaiting Peter (${counts.peter})`], ["closed", "Closed"], ["all", "All"]], ui.cFilter)}
-    <label class="muted">involving <select id="c-agent">${options}</select></label></div>`;
+    <label class="muted">involving <select id="c-agent">${options}</select></label></div>
+    <div class="filters"><span class="flabel">kind</span>${kindRow}</div>`;
   if (!list.length) return filters + `<div class="empty-state">No concerns here.</div>`;
   return filters + list.map(concernRow).join("");
+}
+
+const MILESTONE_TONE = { planned: "s-muted", building: "s-working", blocked: "s-critical", in_review: "s-warning", merged: "s-info", accepted: "s-good" };
+
+function gates(m) {
+  const g = [["slicing", m.sliced_ok_by], ["buildable", m.checked_ok_by], ["tests", m.tested_ok_by], ["code review", m.reviewed_ok_by]];
+  return g.map(([label, by]) => `<span class="gate ${by ? "ok" : ""}" data-tip="${h(label)}: ${by ? "passed by " + h(who(by)) : "not yet"}">${by ? "✓" : "○"} ${h(label)}</span>`).join("");
+}
+
+function milestoneCard(m) {
+  return `<div class="row milestone" data-open="milestone" data-id="${m.id}">
+    <span class="id">M-${m.id}</span>
+    <div class="text"><div><b>${h(m.name)}</b></div>
+      ${m.intent ? `<div class="muted">${h(clip(m.intent, 200))}</div>` : ""}
+      <div class="meta">${gates(m)}</div>
+      <div class="meta">${m.statements_agreed}/${m.statements_live} statements agreed${m.branch ? ` · branch <span class="mono">${h(m.branch)}</span>` : ""}</div></div>
+    <div class="right">${pill(m.status.replace("_", " "), MILESTONE_TONE[m.status])}${m.concerns_open ? pill(plural(m.concerns_open, "open finding"), "s-serious") : ""}</div>
+  </div>`;
+}
+
+function tabMilestones() {
+  if (!data.milestones.length) {
+    return `<div class="empty-state">No milestones yet. Peter writes them in phase 3 (Slice), from Tina's proposals.</div>`;
+  }
+  const out = [];
+  for (const d of data.deliverables) {
+    const ms = data.milestones.filter((m) => m.deliverable_id === d.id);
+    const loose = data.statements.filter((s) => s.deliverable_id === d.id && s.status === "agreed" && s.kind !== "scope" && !s.milestone_id);
+    if (!ms.length && !loose.length) continue;
+    const accepted = ms.filter((m) => m.status === "accepted").length;
+    out.push(`<div class="group-title">D-${d.id} · ${h(d.name)} <span class="muted">${accepted}/${ms.length} accepted</span></div>`);
+    out.push(...ms.map(milestoneCard));
+    if (loose.length) {
+      out.push(`<div class="group-title muted" style="font-size:12px">In no milestone yet (${loose.length})</div>`);
+      out.push(...loose.map((s) => statementRow(s)));
+    }
+  }
+  return out.join("");
 }
 
 function tabAgents() {
   const rows = [...data.agents].sort((a, b) => a.seq - b.seq);
   const table = `<div class="table-scroll"><table>
     <thead><tr><th>Agent</th><th>Status</th><th>Turns</th><th>Skipped</th><th>Raised</th><th>Still open</th>
-      <th>Received</th><th>Holding</th><th>Answers</th><th>Hand-offs</th><th>Approvals</th><th>Written</th><th>Tokens</th></tr></thead>
+      <th>Received</th><th>Holding</th><th>Answers</th><th>Hand-offs</th><th>Approvals</th><th>Written</th><th>Tokens</th>${data.state.cost_per_million_tokens ? "<th>Est. cost</th>" : ""}</tr></thead>
     <tbody>${rows.map((a) => {
       const s = a.stats;
       return `<tr class="clickable" data-open="agent" data-id="${a.id}"><td>${h(shortName(a))} <span class="muted">${h(a.role)}</span></td>
         <td>${pill(a.status, AGENT_TONE[a.status])}</td><td>${s.turns_done}</td><td>${s.turns_skipped}</td>
         <td>${s.concerns_raised}</td><td>${s.concerns_raised_open}</td><td>${s.concerns_received}</td><td>${s.concerns_holding}</td>
-        <td>${s.answers}</td><td>${s.handoffs}</td><td>${s.approvals}</td><td>${s.statements_written}</td><td>${s.tokens ? s.tokens.toLocaleString() : "—"}</td></tr>`;
+        <td>${s.answers}</td><td>${s.handoffs}</td><td>${s.approvals}</td><td>${s.statements_written}</td><td>${s.tokens ? tokens(s.tokens) : "—"}</td>${data.state.cost_per_million_tokens ? `<td>${cost(s.tokens) || "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody></table></div>`;
   return `<h3 style="margin-top:0">Per agent</h3>${table}<h3>Who raises concerns to whom</h3>${matrix()}`;
 }
@@ -385,7 +463,7 @@ function matrix() {
     <div class="legend-scale">fewer ${scale} more <span style="margin-left:8px">· counted against whom each concern was first addressed to</span></div>`;
 }
 
-function barChart(titleText, key) {
+function barChart(titleText, key, fmt = String) {
   const rows = data.per_round;
   const max = Math.max(1, ...rows.map((r) => r[key]));
   const w = 300, hgt = 80, gap = 2, bw = Math.min(24, Math.max(2, w / rows.length - gap));
@@ -395,10 +473,10 @@ function barChart(titleText, key) {
     // A 4px rounded top anchored to the baseline: a path, not a fully rounded rect.
     const rad = Math.min(4, bw / 2, bh);
     const d = bh ? `M${x},${hgt} V${y + rad} Q${x},${y} ${x + rad},${y} H${x + bw - rad} Q${x + bw},${y} ${x + bw},${y + rad} V${hgt} Z` : "";
-    return `<g data-tip="Round ${r.round}: ${r[key]}"><rect x="${x}" y="0" width="${bw + gap}" height="${hgt}" fill="transparent"></rect>${d ? `<path class="bar" d="${d}"></path>` : ""}</g>`;
+    return `<g data-tip="Round ${r.round}: ${fmt(r[key])}${key === "tokens" && cost(r[key]) ? " · " + cost(r[key]) : ""}"><rect x="${x}" y="0" width="${bw + gap}" height="${hgt}" fill="transparent"></rect>${d ? `<path class="bar" d="${d}"></path>` : ""}</g>`;
   }).join("");
   const total = rows.reduce((s, r) => s + r[key], 0);
-  return `<div class="chart"><div class="title">${h(titleText)} <b>${total}</b></div>
+  return `<div class="chart"><div class="title">${h(titleText)} <b>${h(fmt(total))}</b></div>
     <svg viewBox="0 0 ${w} ${hgt + 14}" preserveAspectRatio="none" role="img" aria-label="${h(titleText)} per round">
       ${bars}<line class="axis" x1="0" x2="${w}" y1="${hgt}" y2="${hgt}"></line>
       <text x="0" y="${hgt + 12}">round 1</text><text x="${w}" y="${hgt + 12}" text-anchor="end">round ${rows.length}</text>
@@ -407,13 +485,18 @@ function barChart(titleText, key) {
 
 function tabTimeline() {
   const charts = `<div class="charts">${barChart("Statements written per round", "statements")}${barChart("Concerns raised per round", "concerns")}
-    ${barChart("Answers given per round", "answers")}${barChart("Statements agreed per round", "agreed")}</div>`;
+    ${barChart("Answers given per round", "answers")}${barChart("Statements agreed per round", "agreed")}
+    ${data.state.turns_with_tokens ? barChart("Tokens per round", "tokens", tokens) : ""}</div>`;
   let out = "", round = null;
   for (const t of data.turns) {
-    if (t.round !== round) { round = t.round; out += `<div class="round-head">Round ${round}</div>`; }
+    if (t.round !== round) {
+      round = t.round;
+      const used = data.per_round.find((r) => r.round === round)?.tokens;
+      out += `<div class="round-head">Round ${round}${used ? ` <span class="muted">· ${h(spend(used))}</span>` : ""}</div>`;
+    }
     const status = t.status === "running" ? pill("working", "s-working") : t.status === "skipped" ? pill("skipped", "s-muted") : "";
     out += `<div class="turn ${t.status}"><div class="when">T-${t.id}<br>${time(t.started_at)}</div>
-      <div><b>${h(who(t.agent_id))}</b> ${status} <span class="muted">phase ${t.phase}${t.tokens ? ` · ${t.tokens.toLocaleString()} tokens` : ""}</span>
+      <div><b>${h(who(t.agent_id))}</b> ${status} <span class="muted">phase ${t.phase}${t.tokens ? ` · ${h(spend(t.tokens))}` : ""}</span>
       <div>${t.summary ? linked(t.summary) : t.status === "skipped" ? '<span class="muted">Nothing in the queue.</span>' : ""}</div></div></div>`;
   }
   return charts + (out || `<div class="empty-state">No turns yet.</div>`);
@@ -437,7 +520,7 @@ function tabLog() {
 function openDrawer(type, id) { location.hash = `${type}/${id}`; }
 function closeDrawer() { if (location.hash) history.pushState("", "", location.pathname + location.search); readHash(); }
 function readHash() {
-  const m = location.hash.match(/^#(statement|concern|agent)\/(\d+)$/);
+  const m = location.hash.match(/^#(statement|concern|agent|milestone)\/(\d+)$/);
   ui.drawer = m ? { type: m[1], id: Number(m[2]) } : null;
   renderDrawer();
 }
@@ -449,7 +532,7 @@ function renderDrawer() {
   $("#scrim").hidden = !open;
   if (!open) return;
   const { type, id } = ui.drawer;
-  const fn = { statement: drawerStatement, concern: drawerConcern, agent: drawerAgent }[type];
+  const fn = { statement: drawerStatement, concern: drawerConcern, agent: drawerAgent, milestone: drawerMilestone }[type];
   const [titleHtml, bodyHtml] = fn(id);
   const body = $("#drawer-body"), scroll = body.scrollTop;
   $("#drawer-title").innerHTML = titleHtml;
@@ -522,6 +605,28 @@ function drawerConcern(id) {
   return [`<span class="id">C-${c.id}</span> ${h(c.kind)}`, body];
 }
 
+function drawerMilestone(id) {
+  const m = data.milestones.find((x) => x.id === id);
+  if (!m) return [`M-${id}`, `<div class="empty-state">Not found.</div>`];
+  const d = data.deliverables.find((x) => x.id === m.deliverable_id);
+  const statements = data.statements.filter((s) => s.milestone_id === id);
+  const concerns = data.concerns.filter((c) => c.milestone_id === id);
+  const body = `
+    ${m.intent ? `<div class="statement-text">${linked(m.intent)}</div>` : ""}
+    <dl class="kv">
+      <dt>Status</dt><dd>${pill(m.status.replace("_", " "), MILESTONE_TONE[m.status])}</dd>
+      <dt>Deliverable</dt><dd>${d ? `D-${d.id} · ${h(d.name)}` : "—"}</dd>
+      <dt>Checks</dt><dd>${gates(m)}</dd>
+      ${m.branch ? `<dt>Branch</dt><dd class="mono">${h(m.branch)}</dd>` : ""}
+      <dt>Written</dt><dd>T-${m.turn_id} · order ${m.seq}</dd>
+    </dl>
+    <h3>What it builds (${statements.length})</h3>
+    ${statements.length ? statements.map((s) => statementRow(s)).join("") : `<div class="muted">No statements assigned yet.</div>`}
+    <h3>Findings and concerns (${concerns.length})</h3>
+    ${concerns.length ? concerns.map((c) => thread(c)).join("") : `<div class="muted">None.</div>`}`;
+  return [`<span class="id">M-${m.id}</span> ${h(m.name)}`, body];
+}
+
 function bars(entries) {
   if (!entries.length) return `<div class="muted">None.</div>`;
   const max = Math.max(...entries.map(([, n]) => n));
@@ -547,7 +652,8 @@ function drawerAgent(id) {
       <dt>Joined</dt><dd>${a.active ? (a.joined_round ? `round ${a.joined_round}` : "from the start") : `not staffed${a.join_trigger ? ` · joins when ${h(a.join_trigger)}` : ""}`}</dd>
       ${a.duties.length ? `<dt>Duties</dt><dd>${a.duties.map((d) => `${h(d.relation)} ${h(d.duty)}`).join(", ")}</dd>` : ""}
       ${queue ? `<dt>Queue</dt><dd>${queue}</dd>` : ""}
-      <dt>Turns</dt><dd>${s.turns_done} taken · ${s.turns_skipped} skipped${s.tokens ? ` · ${s.tokens.toLocaleString()} tokens` : ""}</dd>
+      <dt>Turns</dt><dd>${s.turns_done} taken · ${s.turns_skipped} skipped</dd>
+      <dt>Used</dt><dd>${s.tokens ? h(spend(s.tokens)) : "no tokens recorded"}</dd>
       <dt>Concerns</dt><dd>${s.concerns_raised} raised (${s.concerns_raised_open} open) · ${s.concerns_received} received · ${s.concerns_holding} waiting on them</dd>
       <dt>Answers</dt><dd>${s.answers} given · ${s.handoffs} handed off</dd>
       <dt>Approvals</dt><dd>${s.approvals}</dd>
@@ -577,6 +683,14 @@ document.addEventListener("click", (e) => {
     $("#tab-body").scrollTop = 0;
     renderTab();
     if (ui.tab === "log") loadLog();
+    return;
+  }
+  const chip = e.target.closest("[data-chip]");
+  if (chip) {
+    const { chip: key, value } = chip.dataset;
+    if (!value) ui[key].clear(); else if (ui[key].has(value)) ui[key].delete(value); else ui[key].add(value);
+    store.set(key, [...ui[key]].join(","));
+    renderTab();
     return;
   }
   const filter = e.target.closest("[data-filter]");

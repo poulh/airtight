@@ -198,6 +198,15 @@ select, .btn {
 .filters .seg button { background: var(--surface); border: 0; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--ink-2); }
 .filters .seg button + button { border-left: 1px solid var(--line); }
 .filters .seg button.on { background: var(--ink); color: var(--bg); }
+.flabel { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); min-width: 44px; }
+.chipset { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.fchip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px; cursor: pointer; color: var(--ink-2); }
+.fchip .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fchip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.fchip.on .n { color: var(--bg); opacity: .7; }
+.fchip.clear { border-style: dashed; }
+.gate { font-size: 11px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
+.gate.ok { color: var(--good-ink); border-color: currentColor; }
 .group-title { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 6px; font-weight: 650; }
 .group-title:first-child { margin-top: 0; }
 .group-title .muted { font-weight: 400; font-size: 12px; }

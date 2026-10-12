@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 
 HUMAN_ID = 1
@@ -507,6 +508,55 @@ def refresh(conn, turn):
         record_event(conn, turn, "project", 1, st["status"], status, detail)
 
 
+def phase_end(conn):
+    """Whether the current phase's end condition holds: (met, unmet clauses in plain words).
+
+    Mirrors each phase's ends_when in pipeline.yaml; met is None when only a person can tell.
+    """
+    st = state(conn)
+    unmet = []
+    pending = conn.execute("SELECT COUNT(*) FROM statements WHERE status = 'pending'").fetchone()[0]
+    open_count = conn.execute("SELECT COUNT(*) FROM concerns WHERE status = 'open'").fetchone()[0]
+    waiting = len(awaiting_peter(conn))
+    if pending:
+        unmet.append(f"{pending} statement(s) not yet agreed")
+    if open_count:
+        unmet.append(f"{open_count} concern(s) open")
+    if waiting:
+        unmet.append(f"{waiting} closed concern(s) waiting for Peter")
+
+    if st["phase"] == 2:
+        project_root = Path(conn.execute("PRAGMA database_list").fetchone()["file"]).parent.parent
+        if not (project_root / "architecture.md").exists():
+            unmet.append("architecture.md is not written yet")
+    elif st["phase"] == 3:
+        first = conn.execute("SELECT * FROM deliverables WHERE status = 'live' "
+                             "ORDER BY seq, id LIMIT 1").fetchone()
+        if first is None:
+            unmet.append("no live deliverable")
+        else:
+            loose = conn.execute(
+                """SELECT COUNT(*) FROM statements WHERE deliverable_id = ? AND status = 'agreed'
+                     AND kind <> 'scope' AND milestone_id IS NULL""", (first["id"],)).fetchone()[0]
+            ms = conn.execute("SELECT * FROM milestones WHERE deliverable_id = ?",
+                              (first["id"],)).fetchall()
+            if loose:
+                unmet.append(f"{loose} agreed requirement(s) of D-{first['id']} in no milestone")
+            if not ms:
+                unmet.append(f"D-{first['id']} has no milestones yet")
+            unsliced = [f"M-{m['id']}" for m in ms if m["sliced_ok_by"] is None]
+            unchecked = [f"M-{m['id']}" for m in ms if m["checked_ok_by"] is None]
+            if unsliced:
+                unmet.append("slicing not passed on " + ", ".join(unsliced))
+            if unchecked:
+                unmet.append("buildability not checked on " + ", ".join(unchecked))
+    elif st["phase"] == 4:
+        if st["status"] != "done":
+            return False, ["the human picks the next milestone, or says they are done"]
+        return True, []
+    return not unmet, unmet
+
+
 def converged(conn):
     live = live_values(conn, "statement_statuses")
     marks = ",".join("?" * len(live))
@@ -634,7 +684,11 @@ def queue(conn, me):
                                      AND t.status IN ('pending', 'agreed'))
                 ORDER BY s.id""").fetchall()
     q["roster"] = roster(conn)
-    q["unstaffed"] = unstaffed(conn) if has_duty(conn, me["id"], "recruiting", "owns") else []
+    # Only agents who can join now are work; the next phase's are shown for planning, and
+    # counting them would give Peter a turn every round with nothing he is allowed to do.
+    later = unstaffed(conn) if has_duty(conn, me["id"], "recruiting", "owns") else []
+    q["unstaffed"] = [a for a in later if a["joins_at_phase"] <= st["phase"]]
+    q["unstaffed_later"] = [a for a in later if a["joins_at_phase"] > st["phase"]]
     if has_duty(conn, me["id"], "escalation", "owns"):
         q["stuck"] = stuck(conn)
     if has_duty(conn, me["id"], "reporting", "owns"):

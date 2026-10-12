@@ -61,6 +61,11 @@ Validate with `claude plugin validate plugins/airtight` and `claude plugin valid
 - **Versions and upgrades** (2026-10-11, 0.2.0): see *Shipping a change*. The database
   records the version that built it in `meta`; databases from before 0.2.0 have no `meta`
   and show as "before 0.2.0". `at-state` names the agent holding the running turn.
+- **After 0.2.0** (2026-10-11, from the Retirement-Calculator run): agents who join in a later
+  phase are listed in Peter's queue but no longer count as work, so he is skipped instead of
+  taking empty turns; `db.phase_end()` checks each phase's end condition, shown by `at-state`
+  and enforced by `at-round --advance`; turns record tokens via `at-turn tokens`, which the
+  orchestrator runs after each subagent returns.
 - **Not yet done:** a dry run with real agents. Every test so far drives the tools directly.
 - Development: `./setup.sh` builds `.venv` with PyYAML, then
   `export PATH="$PWD/plugins/airtight/bin:$PATH"`. Tools take `--db` or `$AT_DB` (default
@@ -136,7 +141,7 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 | Tool | Who | What it does / refuses |
 |---|---|---|
 | `at-init` | skill | Builds the database from the YAML; records the brief as S-1 and creates D-1 |
-| `at-turn` | skill | `next` opens the next turn (skipping empty queues), `start --agent human`, `end --summary`. Refuses ending Peter's turn with a report due |
+| `at-turn` | skill | `next` opens the next turn (skipping empty queues), `start --agent human`, `end --summary`, `tokens --turn T-n` (the orchestrator records a finished turn's usage). Refuses ending Peter's turn with a report due |
 | `at-queue` | anyone | The turn's work, starting with the agent's last summary and the statements in force |
 | `at-approve` | approvers | Approve, or `--retract` with a concern. Refuses with your own concern open |
 | `at-concern` | anyone | On one statement or milestone, to one agent. Refuses self-addressing, retired statements, staffing (use `at-staff`) |
@@ -148,8 +153,8 @@ Agents never write SQL; the rules live in the tools, not in the prompts.
 | `at-milestone` | various | `add`/`assign` (Peter), `review` (architect), `check` (developer), `start`/`accept` (human), `submit`/`merge` (developer), `pass` (QA, reviewer) |
 | `at-staff` | anyone / human | Request an agent on a statement; the human approves or declines |
 | `at-report` | Peter / human | `run` pauses the loop; `continue` resumes it |
-| `at-state` | anyone | Round, phase, status, what it is paused on, who is left this round |
-| `at-round` | skill | `--advance` (refuses mid-turn, paused, incomplete round, report due); `--phase N` (1→2 only once converged) |
+| `at-state` | anyone | Round, phase, status, what it is paused on, who holds the running turn, who is left this round, and whether the phase's end condition holds (and what is unmet) |
+| `at-round` | skill | `--advance` (refuses mid-turn, paused, incomplete round, report due, a phase whose end condition holds, and a round where every agent was skipped — naming what is unmet); `--phase N` (1→2 only once converged; refuses a phase whose `needs` nobody on the project holds) |
 | `at-render` | anyone | `requirements`: goals with their criteria, per-deliverable statements, kept as is, history. `milestone --milestone M-3`: what to build, each statement's full trail of concerns back through what it replaced, context, invariants, what is not in it, open findings, done-when |
 | `at-policy` / `at-doctor` | anyone | The rules in force; drift between config, docs and database |
 | `at-upgrade` | skill | What the installed plugin added since the project was built; `--apply` merges new config entries into `.airtight/pipeline.yaml` (never changing the project's values), adds new tables and columns, re-seeds the rules, keeps staffing and history, backs both up to `.airtight/backup/` |

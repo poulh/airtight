@@ -242,6 +242,10 @@ def turn_main():
     end.add_argument("--agent", required=True)
     end.add_argument("--summary", help="one or two sentences: what you did and why")
     end.add_argument("--tokens", type=int)
+    tokens = sub.add_parser("tokens", help="the orchestrator: record what a finished turn used")
+    tokens.add_argument("--turn", required=True, help="T-12")
+    tokens.add_argument("--tokens", required=True, type=int,
+                        help="total_tokens from the subagent's usage")
     for p in (sub.choices["next"], start, end):
         p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -266,6 +270,20 @@ def turn_main():
 
     def go():
         conn = db.connect(args.db)
+        if args.action == "tokens":
+            # The agent ends its own turn but cannot see its own usage; the orchestrator can.
+            tid = db.parse_ref(args.turn, "T")[1]
+            row = conn.execute("SELECT * FROM turns WHERE id = ?", (tid,)).fetchone()
+            if row is None:
+                raise Refused(f"no turn T-{tid}")
+            if row["status"] == "running":
+                raise Refused(f"T-{tid} is still running — record its tokens once it has ended")
+            if args.tokens < 0:
+                raise Refused("tokens cannot be negative")
+            conn.execute("UPDATE turns SET tokens = ? WHERE id = ?", (args.tokens, tid))
+            conn.commit()
+            emit({"turn": tid, "tokens": args.tokens}, f"T-{tid}: {args.tokens:,} tokens")
+            return 0
         running = db.running_turn(conn)
 
         if args.action == "end":
@@ -380,6 +398,9 @@ def queue_main():
                 "not_yet_on_the_project": [
                     {"role": a["role"], "name": a["name"], "joins_when": a["join_trigger"],
                      "joins_at_phase": a["joins_at_phase"]} for a in q["unstaffed"]],
+                "joins_next_phase": [
+                    {"role": a["role"], "name": a["name"], "joins_when": a["join_trigger"],
+                     "joins_at_phase": a["joins_at_phase"]} for a in q["unstaffed_later"]],
                 "report_due": q["report_due"],
                 "milestones": q["milestones"],
                 "reports_to_continue": [dict(r) for r in q["reports"]],
@@ -458,9 +479,12 @@ def queue_main():
                   "appeared, at-staff request; if the project will never need them, at-staff pass "
                   "with the reason")
             for a in q["unstaffed"]:
-                soon = (f" (joins at phase {a['joins_at_phase']})"
-                        if a["joins_at_phase"] > st["phase"] else "")
-                print(f"  {a['name']} [{a['role']}]{soon} — joins when: "
+                print(f"  {a['name']} [{a['role']}] — joins when: {a['join_trigger'] or 'needed'}")
+        if q["unstaffed_later"]:
+            print(f"\nJOINS NEXT PHASE ({len(q['unstaffed_later'])}) — nothing to do yet; "
+                  "at-round --phase refuses to move on until they are on the project")
+            for a in q["unstaffed_later"]:
+                print(f"  {a['name']} [{a['role']}] (phase {a['joins_at_phase']}) — joins when: "
                       f"{a['join_trigger'] or 'needed'}")
         if q["stuck"]:
             print(f"\nSTUCK ({len(q['stuck'])}) — at-escalate sends one to the human early")
@@ -1540,6 +1564,7 @@ def state_main():
         waiting_peter = len(db.awaiting_peter(conn))
         active = [a["role"] for a in conn.execute("SELECT role FROM agents WHERE active = 1 "
                                                   "ORDER BY seq")]
+        phase_met, phase_unmet = db.phase_end(conn)
         payload = {
             "round": st["round"], "phase": st["phase"], "phase_name": st["phase_name"],
             "status": st["status"], "paused": st["status"] == "paused",
@@ -1552,6 +1577,7 @@ def state_main():
             "awaiting_peter": waiting_peter, "active": active,
             "converged": st["status"] == "converged", "ends_when": st["ends_when"].strip(),
             "change_mark": st["change_mark"],
+            "phase_end_met": phase_met, "phase_end_unmet": phase_unmet,
         }
         if args.json:
             print(json.dumps(payload, indent=2))
@@ -1568,6 +1594,10 @@ def state_main():
         print(f"  left:         {', '.join(left) or 'nobody — at-round --advance'}")
         print("  statements:   " + (", ".join(f"{n} {s}" for s, n in by_status.items()) or "none"))
         print(f"  concerns:     {open_count} open, {waiting_peter} closed and waiting for Peter")
+        print("  phase end:    " + ("met — show the user; at-round --phase "
+                                    f"{st['phase'] + 1} on their say-so" if phase_met and st["phase"] < 4
+                                    else "met" if phase_met
+                                    else "not yet: " + "; ".join(phase_unmet)))
         if payload["report_due"]:
             print("  report due:   Peter runs at-report run this round")
         return 0
@@ -1621,6 +1651,20 @@ def round_main():
                           "— at-turn next")
         if db.report_due(conn):
             raise Refused("a report is due this round — Peter runs at-report run")
+        met, unmet = db.phase_end(conn)
+        if met and st["phase"] in (2, 3):
+            raise Refused(f"phase {st['phase']} ({st['phase_name']}) is done: "
+                          f"{st['ends_when'].strip()} Show the user, and on their say-so "
+                          f"at-round --phase {st['phase'] + 1}")
+        rotation = {a["id"] for a in db.rotation(conn)}
+        agent_statuses = {r["status"] for r in conn.execute(
+            "SELECT agent_id, status FROM turns WHERE round = ?", (st["round"],))
+            if r["agent_id"] in rotation}
+        if agent_statuses == {"skipped"}:
+            raise Refused(f"every agent was skipped in round {st['round']}, so another round "
+                          f"would do nothing. Phase {st['phase']} still needs: "
+                          + "; ".join(unmet or ["nothing the tools can see"])
+                          + " — show the user at-state")
         conn.execute("UPDATE project_state SET round = round + 1, updated_at = ? WHERE id = 1",
                      (db.now(),))
         db.record_event(conn, None, "project", 1, None, None, f"round {st['round'] + 1}")

@@ -1085,6 +1085,7 @@ round 5, phase 1 (Converge) — converged
   left:         nobody — at-round --advance
   statements:   5 agreed, 2 superseded
   concerns:     0 open, 0 closed and waiting for Peter
+  phase end:    met — show the user; at-round --phase 2 on their say-so
 ```
 
 **turns**

@@ -17,3 +17,7 @@ port = 8765
 
 # How often the page polls for changes.
 refresh_seconds = 3
+
+# Tokens are what the database records (each finished turn, from the agent's usage). Set a
+# blended dollar rate per million tokens to also show an estimated cost; 0 shows tokens only.
+cost_per_million_tokens = 0

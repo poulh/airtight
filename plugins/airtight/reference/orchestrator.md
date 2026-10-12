@@ -35,11 +35,17 @@ small: one command, and only what you need from its answer. Repeat:
    > work through it, and finish with `at-turn end --agent <role> --summary "..."`. Your
    > summary is recorded; reply to me with one line only.
 
+   When the subagent returns, its result reports the tokens it used (`total_tokens`). Record
+   them on the turn `at-turn next` named: `at-turn tokens --turn T-<n> --tokens <total_tokens>`.
+   They are how the user sees what each agent and each round cost.
+
 Report to the user only a one-line round marker and whatever needs them. Do not narrate
 agent turns; the turns table and each report carry that.
 
-If a whole round passes with every agent skipped and the project neither paused nor
-converged, the loop is stuck: stop and show the user `at-state`, rather than advancing again.
+`at-round --advance` refuses to start a round that cannot do anything: when the phase's end
+condition holds (show the user, and move phase on their say-so), or when every agent was
+skipped and something is still unmet (stop and show the user `at-state`, whose *phase end*
+line says what is missing).
 
 ## The human's turn
 

@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 HERE = Path(__file__).resolve().parent
 UI_ROOT = HERE.parent
 DEFAULTS = {"db": ".airtight/project.db", "log": "", "plugin_root": "", "host": "127.0.0.1",
-            "port": 8765, "refresh_seconds": 3}
+            "port": 8765, "refresh_seconds": 3, "cost_per_million_tokens": 0}
 
 CONFIG = dict(DEFAULTS)
 db = None   # airtight.db, imported once the plugin root is known
@@ -46,6 +46,8 @@ def load_config(argv=None):
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--refresh-seconds", type=float)
+    parser.add_argument("--cost-per-million-tokens", type=float,
+                        help="a blended $ rate, to show an estimated cost next to tokens")
     args = parser.parse_args(argv)
 
     config = dict(DEFAULTS)
@@ -54,7 +56,8 @@ def load_config(argv=None):
             config.update(tomllib.load(f))
     if os.environ.get("AT_DB"):
         config["db"] = os.environ["AT_DB"]
-    for key in ("db", "log", "plugin_root", "host", "port", "refresh_seconds"):
+    for key in ("db", "log", "plugin_root", "host", "port", "refresh_seconds",
+                "cost_per_million_tokens"):
         value = getattr(args, key)
         if value is not None:
             config[key] = value
@@ -246,7 +249,10 @@ def snapshot():
         statements.append(s)
 
     # ---- growth per round
-    growth = defaultdict(lambda: {"statements": 0, "concerns": 0, "answers": 0, "agreed": 0})
+    growth = defaultdict(lambda: {"statements": 0, "concerns": 0, "answers": 0, "agreed": 0,
+                                  "tokens": 0})
+    for t in conn.execute("SELECT round, tokens FROM turns WHERE tokens IS NOT NULL"):
+        growth[t["round"]]["tokens"] += t["tokens"]
     for s in statements:
         growth[s["created_round"]]["statements"] += 1
     for c in concerns:
@@ -263,11 +269,22 @@ def snapshot():
     events = rows(conn.execute("SELECT * FROM events ORDER BY id DESC LIMIT 200"))
     phases = rows(conn.execute("SELECT * FROM phases ORDER BY number"))
     deliverables = rows(conn.execute("SELECT * FROM deliverables ORDER BY seq, id"))
-    milestones = rows(conn.execute("SELECT * FROM milestones ORDER BY seq, id"))
+    milestones = rows(conn.execute("SELECT * FROM milestones ORDER BY deliverable_id, seq, id"))
+    for m in milestones:
+        mine = [x for x in statements if x["milestone_id"] == m["id"]]
+        m["statement_ids"] = [x["id"] for x in mine]
+        m["statements_agreed"] = sum(1 for x in mine if x["status"] == "agreed")
+        m["statements_live"] = sum(1 for x in mine if x["status"] in ("agreed", "pending"))
+        on = [c for c in concerns if c["milestone_id"] == m["id"]]
+        m["concern_ids"] = [c["id"] for c in on]
+        m["concerns_open"] = sum(1 for c in on if c["status"] == "open")
     reports = rows(conn.execute("SELECT * FROM reports ORDER BY id DESC"))
     by_status = {r["status"]: r["n"] for r in conn.execute(
         "SELECT status, COUNT(*) AS n FROM statements GROUP BY status")}
 
+    vocab = {name: rows(conn.execute(f"SELECT * FROM {name} ORDER BY seq"))
+             for name in ("statement_kinds", "statement_statuses", "concern_kinds",
+                          "milestone_statuses")}
     state = dict(st)
     state.update({
         "current_turn": dict(running) if running else None,
@@ -281,12 +298,16 @@ def snapshot():
         "stuck": [c["id"] for c in db.stuck(conn)],
         "turns_total": conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0],
         "tokens_total": sum(tokens.values()),
+        "turns_with_tokens": conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE tokens IS NOT NULL").fetchone()[0],
+        "cost_per_million_tokens": float(CONFIG.get("cost_per_million_tokens") or 0),
         "db": CONFIG["db"],
     })
     conn.close()
     return {"state": state, "phases": phases, "agents": agents, "statements": statements,
             "concerns": concerns, "deliverables": deliverables, "milestones": milestones,
             "turns": turns, "events": events, "reports": reports, "per_round": per_round,
+            "vocab": vocab,
             "matrix": [{"from": f, "to": t, "n": n} for (f, t), n in matrix.items()]}
 
 
